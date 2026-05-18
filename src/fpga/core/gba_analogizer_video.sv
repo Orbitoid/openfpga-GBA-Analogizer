@@ -15,7 +15,7 @@
 // scale_mode input (from interact.json 0x8C, synced to clk_vid in core_top):
 //   0 = Debug 1x       240 output clocks, full GBA columns 0..239.
 //   1 = Aspect/Normal  320 output clocks, nearest-neighbor GBA columns 0..239.
-//   2 = Wide/Overscan  448 output clocks, full GBA columns 0..239.
+//   2 = Wide/Overscan  416 output clocks, full GBA columns 0..239.
 //   3 = Aspect/Blend   320 output clocks, horizontally interpolated.
 //   4 = Scaled Full Width 408x204 output clocks, horizontally interpolated.
 //   5 = Full/Square     336x224 output clocks, uniform nearest-neighbor scaled.
@@ -69,7 +69,7 @@ module gba_analogizer_video #(
     // ---- Scale mode decode ----
     localparam [9:0] IMG_W_DEBUG  = 10'd240;
     localparam [9:0] IMG_W_NORMAL = 10'd320;
-    localparam [9:0] IMG_W_WIDE   = 10'd448;
+    localparam [9:0] IMG_W_WIDE   = 10'd416;
     localparam [9:0] IMG_W_LARGE  = 10'd408;
     // Keep enough horizontal margin for the line-buffer pipeline and analog
     // porch timing. Too little margin here can disturb Y/C color decoding.
@@ -79,7 +79,7 @@ module gba_analogizer_video #(
     localparam [8:0] IMG_H_FULL   = 9'd224;
     localparam [9:0] LP_H_ACTIVE  = H_ACTIVE;
     localparam [10:0] LP_SRC_W    = SRC_W;
-    localparam [9:0] H_CENTER_OFFSET = 10'd6;
+    localparam [9:0] H_CENTER_OFFSET = 10'd0;
     localparam [8:0] V_LARGE_OFFSET = 9'd10;
 
     wire mode_debug = (scale_mode == 3'd0);
@@ -97,9 +97,9 @@ module gba_analogizer_video #(
     wire [8:0] image_height = mode_large ? IMG_H_LARGE :
                               mode_full  ? IMG_H_FULL  :
                                            IMG_H_NORMAL;
-    wire [8:0] image_top = mode_full  ? 9'd23 :
-                            mode_large ? V_TOP - ((image_height - IMG_H_NORMAL) >> 1) + V_LARGE_OFFSET :
-                                         V_TOP - ((image_height - IMG_H_NORMAL) >> 1);
+    wire [8:0] image_top = mode_full  ? 9'd18 :
+                            mode_large ? V_TOP - ((image_height - IMG_H_NORMAL) >> 1) + V_LARGE_OFFSET - 9'd5 :
+                                         V_TOP - ((image_height - IMG_H_NORMAL) >> 1) - 9'd5;
 
     function automatic [8:0] scale_y_to_src;
         input [8:0] out_y;

@@ -1757,10 +1757,10 @@ gba_analogizer_video #(
     .SYNC_ACTIVE_LOW (1'b1),
     .TEST_PATTERN    (1'b0),
     .H_TOTAL         (536),
-    .H_ACTIVE        (480),
-    .H_FP            (4),
-    .H_SYNC          (40),
-    // H_BP = 536 - 480 - 4 - 40 = 12
+    .H_ACTIVE        (432),
+    .H_FP            (23),
+    .H_SYNC          (36),
+    // H_BP = 536 - 432 - 23 - 36 = 45; burst ends at count 25
     // H_rate = 8.388608 / 536 = 15.65 kHz; frame rate = 15.65k / 262 = 59.7 Hz
     // V: 51 top blank + 160 active + 48 front porch + 3 vsync = 262
     .V_TOP           (51),

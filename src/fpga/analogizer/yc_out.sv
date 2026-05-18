@@ -25,7 +25,9 @@ V	0.877(R' - Y) = 898 (X 1024)
 */
 //////////////////////////////////////////////////////////
 
-module yc_out
+module yc_out #(
+    parameter MASTER_CLK_FREQ = 50_000_000
+) 
 (
 	input   clk,		
 	input 	[39:0] PHASE_INC,
@@ -160,7 +162,12 @@ always_ff @(posedge clk) begin
 	// Set Colorburst Length Based on Phase_Accum 
 	// Since the colorburst length depends on the video clock freqency, this just sets the approprate count length to match the colorburst lengths closer to 9/10 cycles for NTSC/PAL.
 
-	if (PHASE_INC[39:32] > (PAL_EN ? 8'd56 : 8'd45)) begin
+	if (MASTER_CLK_FREQ == 8_388_608) begin
+		// GBA's low Y/C clock needs burst on the shortened back porch:
+		// count 4..25 is ~0.48..2.98 us at 8.388608 MHz.
+		cburst_length <= 10'd25;
+		cburst_start <= 10'd4;
+	end else if (PHASE_INC[39:32] > (PAL_EN ? 8'd56 : 8'd45)) begin
 		cburst_length <= PAL_EN ? 10'd85 : 10'd90;
 		cburst_start <= 10'd40;
 	end else if (PHASE_INC[39:32] > (PAL_EN ? 8'd37 : 8'd30)) begin

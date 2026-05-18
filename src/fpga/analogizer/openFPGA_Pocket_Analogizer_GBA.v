@@ -88,7 +88,9 @@ assign o_stb        = 1'b0;
 // Y/C encoder (used for modes 3 and 4)
 wire [23:0] yc_o;
 wire        yc_cs;
-yc_out yc_out (
+yc_out #(
+    .MASTER_CLK_FREQ(MASTER_CLK_FREQ)
+) yc_out (
     .clk      (i_clk),
     .PHASE_INC(CHROMA_PHASE_INC),
     .PAL_EN   (PALFLAG),
