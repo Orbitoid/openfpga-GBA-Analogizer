@@ -316,16 +316,20 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_DUPLICATION ON
 set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_RETIMING ON
 set_global_assignment -name PHYSICAL_SYNTHESIS_ASYNCHRONOUS_SIGNAL_PIPELINING ON
 set_global_assignment -name PHYSICAL_SYNTHESIS_EFFORT EXTRA
-set_global_assignment -name FITTER_EFFORT "AUTO FIT"
+set_global_assignment -name FITTER_EFFORT "STANDARD FIT"
 set_global_assignment -name ROUTER_LCELL_INSERTION_AND_LOGIC_DUPLICATION ON
 set_global_assignment -name FINAL_PLACEMENT_OPTIMIZATION ALWAYS
 set_global_assignment -name ALM_REGISTER_PACKING_EFFORT LOW
 set_global_assignment -name AUTO_DELAY_CHAINS_FOR_HIGH_FANOUT_INPUT_PINS ON
-set_global_assignment -name PLACEMENT_EFFORT_MULTIPLIER 2.0
+set_global_assignment -name PLACEMENT_EFFORT_MULTIPLIER 4.0
 set_global_assignment -name ROUTER_TIMING_OPTIMIZATION_LEVEL MAXIMUM
 
+# Keep the CPU mode selector local to its banked-register restore muxes.  The
+# clean overlay-free fit otherwise leaves one routing-dominated setup path.
+set_instance_assignment -name MAX_FANOUT 4 -to ic|gba|igba_cpu|cpu_mode_fiq
+
 # Timing Closure: scoped optimizations for DMA-to-memorymux critical path
-set_instance_assignment -name AUTO_RESOURCE_SHARING OFF -to "ic|igba|igba_memorymux|*"
+set_instance_assignment -name AUTO_RESOURCE_SHARING OFF -to ic|igba|igba_memorymux|*
 
 # Assembler Assignments
 # =====================
@@ -829,11 +833,12 @@ set_global_assignment -name QIP_FILE ../apf/apf.qip
 set_global_assignment -name SYSTEMVERILOG_FILE ../core/core_top.sv
 set_global_assignment -name VERILOG_FILE ../core/core_bridge_cmd.v
 set_global_assignment -name SDC_FILE ../core/core_constraints.sdc
+set_global_assignment -name SDC_FILE ../core/analogizer_fit_margin.sdc
 set_global_assignment -name QIP_FILE ../core/mf_pllbase.qip
 
 # Phase 3: Memory controllers & data loaders
 set_global_assignment -name SYSTEMVERILOG_FILE ../core/sdram_pocket.sv
-set_global_assignment -name SYSTEMVERILOG_FILE ../pocket/data_loader.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../pocket/apf_write_ingress.sv
 set_global_assignment -name SYSTEMVERILOG_FILE ../pocket/psram.sv
 set_global_assignment -name SYSTEMVERILOG_FILE ../pocket/data_unloader.sv
 
@@ -852,6 +857,9 @@ set_global_assignment -name VERILOG_FILE ../pocket/mf_audio_pll/mf_audio_pll_000
 # Phase 5: Cart Saves, Save Type Detection & RTC
 set_global_assignment -name SYSTEMVERILOG_FILE ../core/save_type_detector.sv
 set_global_assignment -name SYSTEMVERILOG_FILE ../core/cart_quirks.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../core/rtc_persistence.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../core/rtc_export.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../core/save_psram_unloader.sv
 set_global_assignment -name SYSTEMVERILOG_FILE ../core/save_state_controller.sv
 
 # GBA core VHDL — MEM library (SyncRam primitives)
@@ -888,6 +896,8 @@ set_global_assignment -name VHDL_FILE ../gba/gba_gpu_timing.vhd
 set_global_assignment -name VHDL_FILE ../gba/gba_joypad.vhd
 set_global_assignment -name VHDL_FILE ../gba/gba_reservedregs.vhd
 set_global_assignment -name VHDL_FILE ../gba/reggba_serial.vhd
+set_global_assignment -name VHDL_FILE ../gba/gba_serial_normal.vhd
+set_global_assignment -name VHDL_FILE ../gba/gba_serial_joybus.vhd
 set_global_assignment -name VHDL_FILE ../gba/gba_serial.vhd
 set_global_assignment -name VHDL_FILE ../gba/gba_gpiodummy.vhd
 set_global_assignment -name VHDL_FILE ../gba/gba_sound.vhd
@@ -905,10 +915,92 @@ set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to bridge_1wire
 set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to bridge_spiclk
 set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to bridge_spimiso
 set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to bridge_spimosi
+set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to port_tran_si
+set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to port_tran_sck
+set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to port_tran_sd
 set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -section_id Top
 set_global_assignment -name NUM_PARALLEL_PROCESSORS 4
-set_global_assignment -name SEED 6
+set_global_assignment -name SEED 75
 
 # Analogizer variant additions
 set_global_assignment -name VERILOG_MACRO "ANALOGIZER_ENABLE=1"
 set_global_assignment -name QIP_FILE ../analogizer/analogizer.qip
+
+# Pin the sys_pll output counters to the locations upstream's ap_core fit
+# uses. Left free, the Analogizer fit picks different counters and the
+# sdram_clk -> clk_sys read capture loses ~1.2 ns of clock skew.
+set_location_assignment PLLOUTPUTCOUNTER_X54_Y7_N1 -to "core_top:ic|mf_pllbase:mp1|mf_pllbase_0002:mf_pllbase_inst|altera_pll:sys_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER"
+set_location_assignment PLLOUTPUTCOUNTER_X54_Y1_N1 -to "core_top:ic|mf_pllbase:mp1|mf_pllbase_0002:mf_pllbase_inst|altera_pll:sys_pll_i|general[1].gpll~PLL_OUTPUT_COUNTER"
+set_location_assignment PLLOUTPUTCOUNTER_X54_Y0_N1 -to "core_top:ic|mf_pllbase:mp1|mf_pllbase_0002:mf_pllbase_inst|altera_pll:sys_pll_i|general[2].gpll~PLL_OUTPUT_COUNTER"
+set_location_assignment PLLOUTPUTCOUNTER_X54_Y5_N1 -to "core_top:ic|mf_pllbase:mp1|mf_pllbase_0002:mf_pllbase_inst|altera_pll:sys_pll_i|general[3].gpll~PLL_OUTPUT_COUNTER"
+
+# Pin the global clock buffers to upstream's ap_core assignment as well, so the
+# clock tree into the fixed SDRAM/CRAM I/O registers matches upstream. Left
+# free, the Analogizer fit picks other CLKCTRLs and SDRAM write and CRAM input
+# setup slack drop below upstream on every seed.
+set_location_assignment CLKCTRL_G5  -to "core_top:ic|mf_pllbase:mp1|mf_pllbase_0002:mf_pllbase_inst|altera_pll:sys_pll_i|outclk_wire[0]~CLKENA0"
+set_location_assignment CLKCTRL_G8  -to "core_top:ic|mf_pllbase:mp1|mf_pllbase_0002:mf_pllbase_inst|altera_pll:sys_pll_i|outclk_wire[1]~CLKENA0"
+set_location_assignment CLKCTRL_G10 -to "core_top:ic|mf_pllbase:mp1|mf_pllbase_0002:mf_pllbase_inst|altera_pll:sys_pll_i|outclk_wire[2]~CLKENA0"
+set_location_assignment CLKCTRL_G7  -to "core_top:ic|mf_pllbase:mp1|mf_pllbase_0002:mf_pllbase_inst|altera_pll:sys_pll_i|outclk_wire[3]~CLKENA0"
+set_location_assignment CLKCTRL_G1  -to "core_top:ic|audio_mixer:audio_out|mf_audio_pll:audio_pll|mf_audio_pll_0002:mf_audio_pll_inst|altera_pll:altera_pll_i|outclk_wire[0]~CLKENA0"
+set_location_assignment CLKCTRL_G0  -to "core_top:ic|audio_mixer:audio_out|mf_audio_pll:audio_pll|mf_audio_pll_0002:mf_audio_pll_inst|altera_pll:altera_pll_i|outclk_wire[1]~CLKENA0"
+set_location_assignment CLKCTRL_G4  -to "clk_74a~inputCLKENA0"
+set_location_assignment CLKCTRL_G11 -to "bridge_spiclk~inputCLKENA0"
+
+# SDRAM output delay chains copied from upstream's ap_core fit. With the clock
+# buffers pinned above, this reproduces upstream's SDRAM write timing instead
+# of the fitter picking per-pin chains for the Analogizer placement.
+set_instance_assignment -name D5_DELAY 15 -to dram_a[0]
+set_instance_assignment -name D5_DELAY 23 -to dram_a[10]
+set_instance_assignment -name D5_DELAY 17 -to dram_a[11]
+set_instance_assignment -name D5_DELAY 16 -to dram_a[1]
+set_instance_assignment -name D5_DELAY 12 -to dram_a[12]
+set_instance_assignment -name D5_DELAY 20 -to dram_a[2]
+set_instance_assignment -name D5_DELAY 24 -to dram_a[3]
+set_instance_assignment -name D5_DELAY 24 -to dram_a[4]
+set_instance_assignment -name D5_DELAY 16 -to dram_a[5]
+set_instance_assignment -name D5_DELAY 17 -to dram_a[6]
+set_instance_assignment -name D5_DELAY 14 -to dram_a[7]
+set_instance_assignment -name D5_DELAY 13 -to dram_a[8]
+set_instance_assignment -name D5_DELAY 11 -to dram_a[9]
+set_instance_assignment -name D5_DELAY 15 -to dram_ba[0]
+set_instance_assignment -name D5_DELAY 16 -to dram_ba[1]
+set_instance_assignment -name D5_DELAY 13 -to dram_cas_n
+set_instance_assignment -name D5_DELAY 0 -to dram_cke
+set_instance_assignment -name D5_DELAY 0 -to dram_clk
+set_instance_assignment -name D5_DELAY 13 -to dram_dq[0]
+set_instance_assignment -name D5_OE_DELAY 13 -to dram_dq[0]
+set_instance_assignment -name D5_DELAY 10 -to dram_dq[10]
+set_instance_assignment -name D5_OE_DELAY 10 -to dram_dq[10]
+set_instance_assignment -name D5_DELAY 13 -to dram_dq[1]
+set_instance_assignment -name D5_OE_DELAY 13 -to dram_dq[1]
+set_instance_assignment -name D5_DELAY 22 -to dram_dq[11]
+set_instance_assignment -name D5_OE_DELAY 22 -to dram_dq[11]
+set_instance_assignment -name D5_DELAY 22 -to dram_dq[12]
+set_instance_assignment -name D5_OE_DELAY 22 -to dram_dq[12]
+set_instance_assignment -name D5_DELAY 11 -to dram_dq[13]
+set_instance_assignment -name D5_OE_DELAY 11 -to dram_dq[13]
+set_instance_assignment -name D5_DELAY 18 -to dram_dq[14]
+set_instance_assignment -name D5_OE_DELAY 18 -to dram_dq[14]
+set_instance_assignment -name D5_DELAY 13 -to dram_dq[15]
+set_instance_assignment -name D5_OE_DELAY 13 -to dram_dq[15]
+set_instance_assignment -name D5_DELAY 11 -to dram_dq[2]
+set_instance_assignment -name D5_OE_DELAY 11 -to dram_dq[2]
+set_instance_assignment -name D5_DELAY 13 -to dram_dq[3]
+set_instance_assignment -name D5_OE_DELAY 13 -to dram_dq[3]
+set_instance_assignment -name D5_DELAY 12 -to dram_dq[4]
+set_instance_assignment -name D5_OE_DELAY 12 -to dram_dq[4]
+set_instance_assignment -name D5_DELAY 18 -to dram_dq[5]
+set_instance_assignment -name D5_OE_DELAY 18 -to dram_dq[5]
+set_instance_assignment -name D5_DELAY 13 -to dram_dq[6]
+set_instance_assignment -name D5_OE_DELAY 13 -to dram_dq[6]
+set_instance_assignment -name D5_DELAY 18 -to dram_dq[7]
+set_instance_assignment -name D5_OE_DELAY 18 -to dram_dq[7]
+set_instance_assignment -name D5_DELAY 15 -to dram_dq[8]
+set_instance_assignment -name D5_OE_DELAY 15 -to dram_dq[8]
+set_instance_assignment -name D5_DELAY 11 -to dram_dq[9]
+set_instance_assignment -name D5_OE_DELAY 11 -to dram_dq[9]
+set_instance_assignment -name D5_DELAY 22 -to dram_dqm[0]
+set_instance_assignment -name D5_DELAY 16 -to dram_dqm[1]
+set_instance_assignment -name D5_DELAY 13 -to dram_ras_n
+set_instance_assignment -name D5_DELAY 12 -to dram_we_n

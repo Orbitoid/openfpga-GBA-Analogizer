@@ -35,7 +35,7 @@
         ]
       },
       {
-        "name": "Turbo",
+        "name": "Button Turbo",
         "id": 25,
         "type": "list",
         "enabled": true,
@@ -59,7 +59,27 @@
         ]
       },
       {
-        "name": "Force RTC (Dangerous)",
+        "name": "Fast Forward Render",
+        "id": 26,
+        "type": "list",
+        "enabled": true,
+        "address": "0x8C",
+        "persist": true,
+        "writeonly": true,
+        "defaultval": 1,
+        "options": [
+          {
+            "name": "Fastest",
+            "value": 0
+          },
+          {
+            "name": "Stable",
+            "value": 1
+          }
+        ]
+      },
+      {
+        "name": "Force Quirk (Dangerous)",
         "id": 30,
         "type": "list",
         "enabled": true,
@@ -83,7 +103,7 @@
         "id": 35,
         "type": "list",
         "enabled": true,
-        "address": "0x8C",
+        "address": "0x90",
         "persist": true,
         "writeonly": true,
         "defaultval": 0,
@@ -156,6 +176,60 @@
           {
             "name": "Y/C PAL, Pocket OFF",
             "value": 12288
+          }
+        ]
+      },
+      {
+        "name": "SNAC Controller",
+        "id": 45,
+        "type": "list",
+        "enabled": true,
+        "address": "0xA0000000",
+        "persist": true,
+        "writeonly": true,
+        "defaultval": 0,
+        "mask": "0xFFFFFF80",
+        "options": [
+          {
+            "name": "None",
+            "value": 0
+          },
+          {
+            "name": "SNES + Pocket",
+            "value": 3
+          },
+          {
+            "name": "SNES Only",
+            "value": 67
+          }
+        ]
+      },
+      {
+        "name": "SNAC Buttons",
+        "id": 46,
+        "type": "list",
+        "enabled": true,
+        "address": "0xA0000000",
+        "persist": true,
+        "writeonly": true,
+        "defaultval": 0,
+        "mask": "0xFFFFFCFF",
+        "options": [
+          {
+            "name": "A/B, X Turbo, Y FF",
+            "value": 0
+          },
+          {
+            "name": "B/Y, A Turbo, X FF",
+            "value": 256
+          },
+          {
+            "name": "A/B Only",
+            "value": 512
+          },
+          {
+            "name": "B/Y Only",
+            "value": 768
           }
         ]
       }

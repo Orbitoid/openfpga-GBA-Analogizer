@@ -187,7 +187,10 @@ module gba_analogizer_video #(
         (v_count <  V_TOP + V_ACTIVE + V_FP + V_SYNC);
 
     // ---- Line-buffer prefetch ----
-    (* ramstyle = "MLAB" *) reg [17:0] linebuf [0:511];
+    // Two read ports, so Quartus keeps one copy per port. M10K (one block per
+    // copy) instead of MLAB saves ~490 ALMs, which the upstream link/RTC
+    // features need. Reads use the registered address, so latency is unchanged.
+    (* ramstyle = "M10K, no_rw_check" *) reg [17:0] linebuf [0:511];
 
     reg        prefetch_active;
     reg        prefetch_buf;

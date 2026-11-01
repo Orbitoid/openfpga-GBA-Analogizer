@@ -6,39 +6,49 @@ Analogizer-maintained fork (with some AI assistance), based on [mincer-ray/openf
 
 ## Features
 
-- **Cart Saves**
 - **Filters**
 - **Save States**
 - **Fast Forward (Bound to Y button)**
+- **Button Turbo (Bound to X button)**
 - **RTC**
+- **Link Cable** - 2/3/4p Multiplayer, GCN link, GBA wireless, Single Pak download
+- **Rumble (DS Rumble Pak)** — normal Pocket core only; the Analogizer core uses the cart slot for the adapter.
 - **Analogizer Build** — Separate `GBA_Analogizer` core package with cartridge adapter support for Analogizer-FPGA analog video output.
-- **FORCE RTC** — Manually enables RTC for ROMs that aren't in the database. This is useful for ROM hacks that add RTC support to games that don't normally use it (like a certain "unbound" hack). Make sure to enable this on first load of the hack, ideally as soon as possible during the bios display to avoid any issues with initializing the save. **USE WITH CAUTION:** enabling this on a game that doesn't actually use RTC can cause crashes or glitches.
-### **⚠️WARNING: Forced RTC setting persists across games! Remember to turn it off before loading a game that doesn't need it⚠️**
+- **SNAC SNES Controller** — Analogizer core only. Play with an original SNES controller through a MiSTer-style SNES SNAC adapter in the Analogizer SNAC port.
 
-##  Currently Not Included
+## Fast Forward
 
-- **Link Cable** - working on it
-- **Gyroscope**
-- **Solar Sensor**
-- **Cheats**
-- **Rewind**
-- **Color correction outside default pocket filters**
+You can change fast forward behavior with the "Fast Forward Render" setting in the menu. Choices are:
 
-The original MiSTer core was built for an FPGA chip roughly twice the size of the one inside the Analogue Pocket. Some extras had to go to make it all fit. The original Pocket port prioritized things that could be fixed with romhacks, for example there is a solar patch that fixes these issues without the core needing to do anything.
+- Fastest: core runs as fast as possible, highest possible fast forward speed but can show tearing/mixed/corrupted frames in some games.
+- Stable: wait for full frames. video during fast forward is MUCH more stable, however max fast forward speed is decreased.
 
 ## RTC and Save Compatibility
 
-When a game uses RTC (either detected automatically or forced on), the core appends RTC data to the end of the save file. This makes the save file larger than a standard GBA save. If you then try to load that save on a GBA core that doesn't support RTC, it will fail with an error because the save file size doesn't match what the core expects. To use the save on a non-RTC core, you would need to trim the extra RTC bytes from the end of the file to restore it to its original size.
+NEW (0.8.0 and above): RTC timestamp is now saved as an external .rtc file next to the .sav. This should increase save compatibility with other cores and emulators since the .sav now presents as correctly sized. Downgrade flow is included so on updating to a version of the core with the new feature, the core should correctly update your saves as well.
 
-The following tools can strip RTC data from a save file:
+LEGACY (0.7.1 and below): When a game uses RTC (either detected automatically or forced on), the core appends RTC data to the end of the save file. This makes the save file larger than a standard GBA save. If you then try to load that save on a GBA core that doesn't support RTC, it will fail with an error because the save file size doesn't match what the core expects. To use the save on a non-RTC core, you would need to trim the extra RTC bytes from the end of the file to restore it to its original size.
+
+>For saves you might be having issues with try the new online self help tool I have added here:
+>
+>https://www.peterdegenaro.com/pages/rtc-save-tool.html
+
+For save files produced by older releases, the following tools might be able to help, but I have not tested them:
 - [mGBA](https://mgba.io/) — The built-in Save Converter tool (Tools → Save Converter) can export saves with RTC data stripped. Requires mGBA v0.10.3 or later.
 - [save-file-converter](https://github.com/euan-forrester/save-file-converter) — A web-based tool that can convert and resize save files across many retro formats.
 
+## **FORCE QUIRK**
+At the moment there only seems to be 1 romhack that needs this feature. If you are trying to play Unbound keep reading, otherwise PLEASE ignore this feature.
+
+— Manually enables RTC for ROMs that aren't in the database. This is useful for ROM hacks that add RTC support to games that don't normally use it. Make sure to enable this on first load of the hack, ideally as soon as possible during the bios display to avoid any issues with initializing the save. **USE WITH CAUTION:** enabling this on a game that doesn't actually use RTC can cause crashes or glitches.
+### **⚠️WARNING: Forced RTC setting persists across games! Remember to turn it off before loading a game that doesn't need it⚠️**
+### **⚠️WARNING: Do not enable this setting unless you are playing a romhack that needs it⚠️**
+
 ## Accuracy
 
-This core more or less replicates the current accuracy of the MiSTer GBA core. The features that were cut to fit the smaller FPGA were convenience features, not accuracy-related logic. It scores similarly to the MiSTer core in the mGBA test suite. If you encounter an Analogizer-specific issue, please open it on this fork.
+This core more or less replicates the current accuracy of the MiSTer GBA core master branch. The features that were cut to fit the smaller FPGA were convenience features, not accuracy-related logic. It scores similarly to the MiSTer core in the mGBA test suite. If you encounter an Analogizer-specific issue, please open it on this fork.
 
-note: MiSTer core has an accuracy branch. A few of those changes have made it into this core but the bulk is still wip on a different branch.
+Note: MiSTer core has an accuracy branch. A few of those changes have made it into this core but the bulk is still wip on a different branch.
 
 ## Installation
 
@@ -73,11 +83,32 @@ The `CRT Scale` core setting controls how the 240x160 GBA framebuffer is mapped 
 
 The Analogizer video path uses `clk_vid` timing at about 15.65 kHz / 59.7 Hz, prefetches each GBA line through a small line buffer, and shares the existing framebuffer read port with the Pocket video adapter. Pocket screen output remains available unless a `Pocket OFF` Analogizer mode is selected.
 
+## SNAC Controller (Analogizer)
+
+The `GBA_Analogizer` core can read an original SNES controller through the Analogizer SNAC port, using a MiSTer-style SNES SNAC adapter (for example the retroremake SNES SNAC adapter) and a USB-A to USB-A cable. Only the first controller port of the adapter is used.
+
+Core settings:
+
+- **SNAC Controller**
+  - **None** — SNAC port not polled (default).
+  - **SNES + Pocket** — SNES controller and Pocket/dock controls both drive the GBA buttons.
+  - **SNES Only** — Pocket/dock controls are ignored while SNAC is active.
+- **SNAC Buttons**
+  - **A/B, X Turbo, Y FF** — SNES A/B are GBA A/B; X is the Turbo button and Y is Fast Forward, matching the Pocket layout.
+  - **B/Y, A Turbo, X FF** — SNES B/Y act as GBA A/B (the diagonal pair, closer to the GBA's button placement); A is Turbo and X is Fast Forward.
+  - **A/B Only** / **B/Y Only** — Same face-button layouts with Turbo and Fast Forward disabled on the SNES controller.
+
+L/R, Start, Select and the D-pad always map directly. Turbo and Fast Forward behaviour still follows the `Button Turbo` and `Fast Forward Mode` settings. If the controller is unplugged, the core reports no buttons pressed.
+
+Rumble cartridges are not available on the Analogizer core because the adapter occupies the cartridge slot.
+
 ## Known Issues
 
 - **Fast forward speed varies by game** — Games that make heavy use of the GBA's slower external RAM will not fast-forward as quickly as games that primarily use internal RAM. This is most noticeable with the Classic NES Series titles.
 - **Analogizer support is a separate core** — Use `GBA_Analogizer`, not the normal `GBA` core, when using the Analogizer adapter.
 - **Analogizer output depends on CRT/display tolerance** — The CRT path targets about 15.65 kHz / 59.7 Hz. Some displays or scalers may need a different scale mode or video output type.
+- **Fast forward creates visible screen tearing** — Nothing i can do about this for the time being. Would need a frame buffer.
+- **64MB Video carts do not work** you cant watch shrek, shrek 2, or shark tale =(
 
 ## Building from Source
 

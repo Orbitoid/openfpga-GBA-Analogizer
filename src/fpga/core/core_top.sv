@@ -230,33 +230,158 @@ assign port_ir_rx_disable = 1;
 // bridge endianness
 assign bridge_endian_little = 0;
 
+wire cart_rumble;                    // from gba_top, clk_sys domain
+
 `ifndef ANALOGIZER_ENABLE
-// cart is unused, so set all level translators accordingly
-// directions are 0:IN, 1:OUT
-assign cart_tran_bank3 = 8'hzz;
-assign cart_tran_bank3_dir = 1'b0;
-assign cart_tran_bank2 = 8'hzz;
-assign cart_tran_bank2_dir = 1'b0;
-assign cart_tran_bank1 = 8'hzz;
-assign cart_tran_bank1_dir = 1'b0;
-assign cart_tran_bank0 = 4'hf;
+// The Analogizer build uses the cart slot for the adapter, so the rumble
+// driver below is only present in the normal Pocket build.
+// ---- Rumble driver (cart slot: DS Rumble Pak or GPIO rumble cart) ----
+// Pin map:
+//   bank3[7:0] = AD[7:0]
+//   bank2[7:0] = AD[15:8]
+//   bank1[7:0] = A[23:16]
+//   bank0[4]   = /CS
+//   bank0[5]   = /RD
+//   bank0[6]   = /WR
+//   bank0[7]   = PHI
+//   pin30      = /CS2 (SRAM select)
+// One driver serves both device types without detection, using real GBA
+// ROM-bus write cycles (address latched on /CS fall, data on /WR rise):
+//   DS Rumble Pak: tick actuator. It latches AD1 on /WR rise and ignores
+//     /CS and address. It moves on each AD1 change, so AD1 flips once per
+//     2.54 ms while rumble is on (timing from budude2 GBC, rescaled to clk_74a).
+//   GPIO rumble cart (Drill Dozer, WarioWare Twisted): motor on GPIO3 level.
+//     Write 80000C6h (direction) = bit3 out, then 80000C4h (data) = bit3 motor.
+// Each update writes direction then data. Both carry AD1 = the current tick
+// state, so the DS pak sees one AD1 change per update at most. An update runs
+// whenever the tick or motor level changes, and again every ~14 ms so a cart
+// inserted later is set up. A[23:16] = 0, so writes stay in the 80000xxh ROM
+// window (never EEPROM, which sits at A23+).
+
+wire cart_rumble_74;                 // synced to clk_74a
+synch_3 cart_rumble_sync(cart_rumble, cart_rumble_74, clk_74a);
+
+localparam [17:0] RUMBLE_PERIOD   = 18'd188560;  // 2.540 ms per flip
+
+// AD1 flips once per period while cart_rumble is high (toggle, not gate),
+// so any game "on" pulse, however short, produces at least one flip and
+// game software-PWM (Drill Dozer GPIO3) can't alias against a fixed
+// carrier. When idle, flips stop and AD1 holds its last value.
+reg [17:0] rumble_cnt = 18'd0;       // 0 = idle
+reg        rumble_ad1 = 1'b0;
+
+always @(posedge clk_74a) begin
+    if (rumble_cnt == 18'd0 || rumble_cnt == RUMBLE_PERIOD - 18'd1) begin
+        if (cart_rumble_74) begin
+            rumble_ad1 <= ~rumble_ad1;
+            rumble_cnt <= 18'd1;
+        end else begin
+            rumble_cnt <= 18'd0;
+        end
+    end else begin
+        rumble_cnt <= rumble_cnt + 18'd1;
+    end
+end
+
+// Bus write sequencer. One write = 120 clk (~1.6 us) in 20-clk (~270 ns) phases:
+//   0-19 address setup, 20-39 /CS low (address latched), 40-59 data setup,
+//   60-79 /WR low, 80-99 /WR high (data latched), 100-119 /CS high.
+localparam [15:0] GPIO_DATA_ADDR = 16'h0062;  // 80000C4h / 2
+localparam [15:0] GPIO_DIR_ADDR  = 16'h0063;  // 80000C6h / 2
+
+reg [19:0] rumble_refresh = 20'd0;   // 2^20 clk = 14.1 ms
+reg        refresh_due    = 1'b1;    // set up the cart once after config
+reg        wr_busy        = 1'b0;
+reg        wr_data_phase  = 1'b0;    // 0 = direction write, 1 = data write
+reg [6:0]  wr_cnt         = 7'd0;
+reg        sent_motor     = 1'b0;
+reg        sent_ad1       = 1'b0;
+
+reg [15:0] rumble_ad      = 16'h0000;
+reg        rumble_cs_n    = 1'b1;
+reg        rumble_wr_n    = 1'b1;
+
+wire [15:0] wr_addr = wr_data_phase ? GPIO_DATA_ADDR : GPIO_DIR_ADDR;
+wire [15:0] wr_data = wr_data_phase ? {12'h000, sent_motor, 1'b0, sent_ad1, 1'b0}
+                                    : {12'h000, 1'b1,       1'b0, sent_ad1, 1'b0};
+
+always @(posedge clk_74a) begin
+    rumble_refresh <= rumble_refresh + 20'd1;
+    if (&rumble_refresh) refresh_due <= 1'b1;
+
+    if (!wr_busy) begin
+        if (refresh_due || sent_ad1 != rumble_ad1 || sent_motor != cart_rumble_74) begin
+            refresh_due   <= 1'b0;
+            sent_ad1      <= rumble_ad1;
+            sent_motor    <= cart_rumble_74;
+            wr_busy       <= 1'b1;
+            wr_data_phase <= 1'b0;
+            wr_cnt        <= 7'd0;
+        end
+    end else if (wr_cnt == 7'd119) begin
+        wr_cnt <= 7'd0;
+        if (wr_data_phase) wr_busy <= 1'b0;
+        wr_data_phase <= ~wr_data_phase;
+    end else begin
+        wr_cnt <= wr_cnt + 7'd1;
+    end
+
+    // Registered pin outputs. Between writes AD keeps the last data value.
+    if (wr_busy) begin
+        rumble_ad   <= (wr_cnt < 7'd40) ? wr_addr : wr_data;
+        rumble_cs_n <= ~(wr_cnt >= 7'd20 && wr_cnt < 7'd100);
+        rumble_wr_n <= ~(wr_cnt >= 7'd60 && wr_cnt < 7'd80);
+    end else begin
+        rumble_cs_n <= 1'b1;
+        rumble_wr_n <= 1'b1;
+    end
+end
+
+assign cart_tran_bank3     = rumble_ad[7:0];
+assign cart_tran_bank3_dir = 1'b1;
+assign cart_tran_bank2     = rumble_ad[15:8];
+assign cart_tran_bank2_dir = 1'b1;
+assign cart_tran_bank1     = 8'h00;                 // A[23:16] = 0 (80000xxh)
+assign cart_tran_bank1_dir = 1'b1;
+// bank0[7]=PHI=0, [6]=/WR, [5]=/RD=1, [4]=/CS
+assign cart_tran_bank0     = {1'b0, rumble_wr_n, 1'b1, rumble_cs_n};
 assign cart_tran_bank0_dir = 1'b1;
-assign cart_tran_pin30 = 1'b0;
+assign cart_tran_pin30 = 1'b0;                      // /CS2: left to Pocket hardware (template default)
 assign cart_tran_pin30_dir = 1'bz;
 assign cart_pin30_pwroff_reset = 1'b0;
 assign cart_tran_pin31 = 1'bz;
 assign cart_tran_pin31_dir = 1'b0;
 `endif // !ANALOGIZER_ENABLE
 
-// link port is unused, set to input only to be safe
-assign port_tran_so = 1'bz;
-assign port_tran_so_dir = 1'b0;
-assign port_tran_si = 1'bz;
-assign port_tran_si_dir = 1'b0;
-assign port_tran_sck = 1'bz;
-assign port_tran_sck_dir = 1'b0;
-assign port_tran_sd = 1'bz;
-assign port_tran_sd_dir = 1'b0;
+// ---- Link Cable ----
+// gba_serial owns the mode mux and supplies one value/OE pair per physical
+// pin. Keep the FPGA pad and Pocket level-translator direction in lockstep.
+// Feeding every pad back also permits GPIO readback and driven-pin feedback.
+wire serial_so_out;
+wire serial_so_oe;
+wire serial_so_in = port_tran_so;
+wire serial_si_out;
+wire serial_si_oe;
+wire serial_si_in = port_tran_si;
+wire serial_sd_out;
+wire serial_sd_oe;
+wire serial_sd_in = port_tran_sd;
+wire serial_sc_out;
+wire serial_sc_oe;
+wire serial_sc_in = port_tran_sck;
+wire serial_link_active;
+
+assign port_tran_so     = serial_so_oe ? serial_so_out : 1'bz;
+assign port_tran_so_dir = serial_so_oe;
+
+assign port_tran_si     = serial_si_oe ? serial_si_out : 1'bz;
+assign port_tran_si_dir = serial_si_oe;
+
+assign port_tran_sd     = serial_sd_oe ? serial_sd_out : 1'bz;
+assign port_tran_sd_dir = serial_sd_oe;
+
+assign port_tran_sck     = serial_sc_oe ? serial_sc_out : 1'bz;
+assign port_tran_sck_dir = serial_sc_oe;
 
 // ---- PSRAM Controller (EWRAM die 0 + Cart Saves die 1) ----
 // Memory map on cram0:
@@ -321,39 +446,106 @@ assign cram1_we_n = 1;
 assign cram1_ub_n = 1;
 assign cram1_lb_n = 1;
 
-// ---- Save Data Loader/Unloader (→ PSRAM cram0 die 1) ----
-// Save data loads from SD card to PSRAM die 1 at boot.
+// ---- Shared APF Write Ingress and Save Unloader ----
+// ROM, save, and BIOS writes cross the asynchronous bridge as whole 32-bit
+// records. A fence is inserted after dataslot_allcomplete and is released only
+// after every earlier halfword and physical PSRAM write has completed.
 // Save data unloads from PSRAM die 1 to SD card on request.
 // During gameplay, bus_out arbitration handles save read/write via PSRAM.
-//
-// PSRAM access priority (only one active at a time due to Pocket OS sequencing):
-//   1. save_loader — during boot (before dataslot_allcomplete)
-//   2. save_unloader — during save writeback (core paused by OS)
-//   3. bus_out — during gameplay
 
-wire        save_loader_wr;
-wire [27:0] save_loader_addr;
-wire [15:0] save_loader_data;
+localparam [1:0] INGRESS_ROM  = 2'd1;
+localparam [1:0] INGRESS_SAVE = 2'd2;
+localparam [1:0] INGRESS_BIOS = 2'd3;
 
-// Save data_loader — captures bridge writes at 0x2xxxxxxx → PSRAM die 1
-data_loader #(
-    .ADDRESS_MASK_UPPER_4   ( 4'h2 ),
-    .ADDRESS_SIZE           ( 28 ),
-    .OUTPUT_WORD_SIZE       ( 2 ),          // 16-bit output to match PSRAM width
-    .WRITE_MEM_CLOCK_DELAY  ( 20 )          // Match PSRAM access time (~70ns)
-) save_data_loader (
-    .clk_74a            ( clk_74a ),
-    .clk_memory         ( clk_sys ),
+wire        ingress_valid;
+wire [1:0]  ingress_dest;
+wire [27:0] ingress_addr;
+wire [15:0] ingress_data;
+wire        ingress_ready;
+wire        ingress_fence_valid;
+wire        ingress_fence_ready;
+wire        ingress_fence_done;
+wire        ingress_write_busy;
 
-    .bridge_wr          ( bridge_wr ),
+apf_write_ingress write_ingress (
+    .clk_74a              ( clk_74a ),
+    .clk_memory           ( clk_sys ),
+    .bridge_wr            ( bridge_wr ),
     .bridge_endian_little ( bridge_endian_little ),
-    .bridge_addr        ( bridge_addr ),
-    .bridge_wr_data     ( bridge_wr_data ),
-
-    .write_en           ( save_loader_wr ),
-    .write_addr         ( save_loader_addr ),
-    .write_data         ( save_loader_data )
+    .bridge_addr          ( bridge_addr ),
+    .bridge_wr_data       ( bridge_wr_data ),
+    .completion_request   ( dataslot_allcomplete ),
+    .write_valid          ( ingress_valid ),
+    .write_dest           ( ingress_dest ),
+    .write_addr           ( ingress_addr ),
+    .write_data           ( ingress_data ),
+    .write_ready          ( ingress_ready ),
+    .fence_valid          ( ingress_fence_valid ),
+    .fence_ready          ( ingress_fence_ready ),
+    .fence_done           ( ingress_fence_done ),
+    .write_busy           ( ingress_write_busy )
 );
+
+wire ingress_accept = ingress_valid && ingress_ready;
+wire save_loader_wr = ingress_accept && ingress_dest == INGRESS_SAVE;
+wire [27:0] save_loader_addr = ingress_addr;
+wire [15:0] save_loader_data = ingress_data;
+
+wire save_loader_is_cart = save_loader_addr[27:24] == 4'h0;
+wire save_loader_is_rtc = save_loader_addr[27:24] == 4'h1;
+wire save_loader_is_body = save_loader_is_cart &&
+                           save_loader_addr[23:0] < save_size_sys;
+wire save_loader_is_legacy = save_loader_is_cart &&
+    save_loader_addr[23:0] >= save_size_sys &&
+    save_loader_addr[23:0] < save_size_sys + 24'd16;
+wire save_loader_is_sidecar = save_loader_is_rtc &&
+                              save_loader_addr[23:0] < 24'd16;
+
+localparam [1:0] SAVE_WR_IDLE  = 2'd0;
+localparam [1:0] SAVE_WR_GRANT = 2'd1;
+localparam [1:0] SAVE_WR_GUARD = 2'd2;
+localparam [1:0] SAVE_WR_WAIT  = 2'd3;
+reg [1:0] save_write_state;
+reg [27:0] save_write_addr;
+reg [15:0] save_write_data;
+
+wire save_body_accept = save_loader_wr && save_loader_is_body;
+wire save_candidate_accept = save_loader_wr &&
+                             (save_loader_is_legacy || save_loader_is_sidecar);
+
+assign ingress_ready = ingress_dest != INGRESS_SAVE ||
+                       !save_loader_is_body ||
+                       (save_write_state == SAVE_WR_IDLE && !psram_busy);
+assign ingress_fence_ready = save_write_state == SAVE_WR_IDLE && !psram_busy;
+
+always @(posedge clk_sys) begin
+    if (~pll_core_locked) begin
+        save_write_state <= SAVE_WR_IDLE;
+        save_write_addr <= 28'd0;
+        save_write_data <= 16'd0;
+    end else begin
+        case (save_write_state)
+            SAVE_WR_IDLE: if (save_body_accept) begin
+                save_write_addr <= save_loader_addr;
+                save_write_data <= save_loader_data;
+                save_write_state <= SAVE_WR_GRANT;
+            end
+            SAVE_WR_GRANT: save_write_state <= SAVE_WR_GUARD;
+            SAVE_WR_GUARD: save_write_state <= SAVE_WR_WAIT;
+            SAVE_WR_WAIT: if (!psram_busy)
+                save_write_state <= SAVE_WR_IDLE;
+            default: save_write_state <= SAVE_WR_IDLE;
+        endcase
+    end
+end
+
+reg loader_drained;
+always @(posedge clk_sys) begin
+    if (~pll_core_locked)
+        loader_drained <= 1'b0;
+    else if (ingress_fence_done)
+        loader_drained <= 1'b1;
+end
 
 // Save data_unloader — serves bridge reads at 0x2xxxxxxx from PSRAM die 1
 // The unloader expects fixed-latency reads. We use a small FSM to bridge
@@ -361,7 +553,7 @@ data_loader #(
 wire [31:0] save_read_bridge_data;
 wire        save_unloader_rd;
 wire [27:0] save_unloader_addr;
-reg  [15:0] save_unloader_data;
+wire [15:0] save_unloader_data;
 
 data_unloader #(
     .ADDRESS_MASK_UPPER_4   ( 4'h2 ),
@@ -405,42 +597,31 @@ reg         busfsm_psram_write_high;
 reg         busfsm_psram_write_low;
 
 // Save unloader read bridge — captures PSRAM read result for the unloader
-// RTC region: addresses >= save_size_sys are served from RTC registers, not PSRAM
-wire save_unload_is_rtc = (save_size_sys != 24'd0) &&
-                          (save_unloader_addr[23:0] >= save_size_sys);
+wire save_unload_is_cart = save_unloader_addr[27:24] == 4'h0 &&
+                           save_unloader_addr[23:0] < save_size_sys;
+wire save_unload_is_rtc = save_unloader_addr[27:24] == 4'h1 &&
+                          save_unloader_addr[23:0] < 24'd16;
+wire [15:0] rtc_unload_word;
+wire [15:0] save_cart_unload_word;
+wire        save_cart_psram_read_en;
+wire [21:0] save_cart_psram_addr;
 
-// RTC data mux for save unloader (word index from low bits of byte addr)
-reg [15:0] rtc_unload_word;
-always @(*) begin
-    case (save_unloader_addr[3:1])
-        3'd0: rtc_unload_word = rtc_timestamp_out[15:0];
-        3'd1: rtc_unload_word = rtc_timestamp_out[31:16];
-        3'd2: rtc_unload_word = rtc_savedtime_out[15:0];
-        3'd3: rtc_unload_word = rtc_savedtime_out[31:16];
-        3'd4: rtc_unload_word = {6'b0, rtc_savedtime_out[41:32]};
-        default: rtc_unload_word = 16'd0;
-    endcase
-end
+save_psram_unloader save_cart_unloader (
+    .clk                ( clk_sys ),
+    .reset_n            ( pll_core_locked ),
+    .unloader_read_en   ( save_unloader_rd && save_unload_is_cart ),
+    .unloader_addr      ( save_unloader_addr[21:1] ),
+    .unloader_data      ( save_cart_unload_word ),
+    .psram_busy         ( psram_busy ),
+    .psram_read_avail   ( psram_read_avail ),
+    .psram_data         ( psram_data_out ),
+    .psram_read_en      ( save_cart_psram_read_en ),
+    .psram_addr         ( save_cart_psram_addr )
+);
 
-reg         save_unload_pending;
-always @(posedge clk_sys) begin
-    if (~pll_core_locked) begin
-        save_unload_pending <= 0;
-    end else begin
-        if (save_unloader_rd) begin
-            if (save_unload_is_rtc) begin
-                // RTC region: serve directly from registers
-                save_unloader_data <= rtc_unload_word;
-            end else if (!psram_busy) begin
-                save_unload_pending <= 1;
-            end
-        end
-        if (psram_read_avail && save_unload_pending) begin
-            save_unloader_data  <= psram_data_out;
-            save_unload_pending <= 0;
-        end
-    end
-end
+assign save_unloader_data = save_unload_is_rtc  ? rtc_unload_word :
+                            save_unload_is_cart ? save_cart_unload_word :
+                                                  16'd0;
 
 // ---- PSRAM die 1 clear (no-save boot) ----
 // PSRAM retains data across FPGA reconfiguration. When no save file is
@@ -451,7 +632,7 @@ reg save_data_received;
 always @(posedge clk_sys) begin
     if (~pll_core_locked)
         save_data_received <= 0;
-    else if (save_loader_wr)
+    else if (save_body_accept)
         save_data_received <= 1;
 end
 
@@ -461,7 +642,8 @@ reg  [16:0] clr_addr;    // [16]=done flag, [15:0]=word addr (128 KB = 64K words
 reg         clr_wr;       // 1-cycle write pulse
 reg         clr_guard;    // 1-cycle guard for psram_busy propagation
 wire        save_clear_done = clr_addr[16];
-wire        save_mem_ready  = save_data_received | save_clear_done;
+wire        save_mem_ready  = (loader_drained && save_data_received) |
+                              save_clear_done;
 
 always @(posedge clk_sys) begin
     clr_wr <= 0;
@@ -472,7 +654,7 @@ always @(posedge clk_sys) begin
     end else begin
         case (clr_state)
             CLR_IDLE: begin
-                if (dataslot_allcomplete_s && !save_data_received && !save_clear_done)
+                if (loader_drained && !save_data_received && !save_clear_done)
                     clr_state <= CLR_WR;
             end
             CLR_WR: begin
@@ -498,15 +680,25 @@ always @(posedge clk_sys) begin
     end
 end
 
-// PSRAM mux: priority encode loader > clear > unloader > bus_out
+// PSRAM mux: priority encode loader grant > clear > unloader > bus_out
 always @(*) begin
-    if (save_loader_wr) begin
+    if (save_write_state == SAVE_WR_GRANT) begin
         // Save loader write → die 1
         psram_write_en   = 1;
         psram_read_en    = 0;
         psram_bank_sel   = 1;  // die 1
-        psram_addr       = save_loader_addr[21:1]; // byte→word addr (drop bit 0)
-        psram_data_in    = save_loader_data;
+        psram_addr       = save_write_addr[21:1]; // byte→word addr (drop bit 0)
+        psram_data_in    = save_write_data;
+        psram_write_high = 1;
+        psram_write_low  = 1;
+    end else if (save_write_state != SAVE_WR_IDLE) begin
+        // Keep every other client disconnected throughout the propagation
+        // guard and physical busy interval of a loader write.
+        psram_write_en   = 0;
+        psram_read_en    = 0;
+        psram_bank_sel   = 1;
+        psram_addr       = save_write_addr[21:1];
+        psram_data_in    = save_write_data;
         psram_write_high = 1;
         psram_write_low  = 1;
     end else if (clr_wr) begin
@@ -518,12 +710,13 @@ always @(*) begin
         psram_data_in    = 16'hFFFF;
         psram_write_high = 1;
         psram_write_low  = 1;
-    end else if (save_unloader_rd && !save_unload_pending && !save_unload_is_rtc) begin
-        // Save unloader read → die 1 (skip for RTC region)
+    end else if (save_cart_psram_read_en) begin
+        // Save unloader read → die 1. The adapter emits one launch pulse
+        // even though data_unloader holds its request high until sampling.
         psram_write_en   = 0;
         psram_read_en    = 1;
         psram_bank_sel   = 1;  // die 1
-        psram_addr       = save_unloader_addr[21:1];
+        psram_addr       = save_cart_psram_addr;
         psram_data_in    = 16'd0;
         psram_write_high = 1;
         psram_write_low  = 1;
@@ -570,6 +763,7 @@ wire [31:0] bus_out_Dout;   // Read data to gba_top (in to gba_top)
 wire [25:0] bus_out_Adr;    // Address from gba_top
 wire        bus_out_rnw;    // 1=read, 0=write
 wire        bus_out_ena;    // Request strobe
+wire  [3:0] bus_out_be;     // EWRAM write byte enables
 reg         bus_out_done;
 
 // Arbitration state machine
@@ -591,6 +785,7 @@ reg         sdram_ch2_rd;
 reg         sdram_ch2_wr;
 reg  [24:0] sdram_ch2_addr;
 reg  [31:0] sdram_ch2_din;
+reg   [3:0] sdram_ch2_be;
 wire [31:0] sdram_ch2_dout;
 wire        sdram_ch2_ready;
 
@@ -620,6 +815,7 @@ always @(posedge clk_sys) begin
                     end else begin
                         sdram_ch2_wr  <= 1;
                         sdram_ch2_din <= bus_out_Din;
+                        sdram_ch2_be  <= bus_out_be;
                     end
                     bus_state <= BUS_EWRAM_WAIT;
                 end else begin
@@ -716,10 +912,10 @@ wire [31:0] sdram_rd_data_second;
 wire        sdram_read_req_gba;
 wire [24:0] sdram_read_addr_gba;
 
-// Write interface — from ROM data_loader (active during boot)
-wire        rom_loader_wr;
-wire [27:0] rom_loader_addr;
-wire [15:0] rom_loader_data;
+// Write interface — from the shared APF ingress (active during boot)
+wire        rom_loader_wr = ingress_accept && ingress_dest == INGRESS_ROM;
+wire [27:0] rom_loader_addr = ingress_addr;
+wire [15:0] rom_loader_data = ingress_data;
 
 // Save state staging SDRAM signals (from save_state_controller)
 wire        ss_sdram_wr_req;
@@ -765,6 +961,7 @@ sdram_pocket sdram (
     .ch2_wr         ( sdram_ch2_wr ),
     .ch2_addr       ( sdram_ch2_addr ),
     .ch2_din        ( sdram_ch2_din ),
+    .ch2_be         ( sdram_ch2_be ),
     .ch2_dout       ( sdram_ch2_dout ),
     .ch2_ready      ( sdram_ch2_ready ),
 
@@ -782,26 +979,6 @@ sdram_pocket sdram (
     .dram_ras_n     ( dram_ras_n ),
     .dram_cas_n     ( dram_cas_n ),
     .dram_we_n      ( dram_we_n )
-);
-
-// ROM data_loader — captures bridge writes at 0x1xxxxxxx, outputs 16-bit words
-data_loader #(
-    .ADDRESS_MASK_UPPER_4   ( 4'h1 ),
-    .ADDRESS_SIZE           ( 28 ),
-    .OUTPUT_WORD_SIZE       ( 2 ),          // 16-bit output to match SDRAM width
-    .WRITE_MEM_CLOCK_DELAY  ( 20 )          // ~20 clk_sys cycles between writes
-) rom_data_loader (
-    .clk_74a            ( clk_74a ),
-    .clk_memory         ( clk_sys ),
-
-    .bridge_wr          ( bridge_wr ),
-    .bridge_endian_little ( bridge_endian_little ),
-    .bridge_addr        ( bridge_addr ),
-    .bridge_wr_data     ( bridge_wr_data ),
-
-    .write_en           ( rom_loader_wr ),
-    .write_addr         ( rom_loader_addr ),
-    .write_data         ( rom_loader_data )
 );
 
 // Track ROM size — capture last byte address written during loading.
@@ -844,6 +1021,7 @@ save_type_detector save_det (
 // Quirk outputs feed gba_top ports in Step 5.5.
 wire        quirk_sram;
 wire        quirk_gpio;       // → specialmodule
+wire        quirk_rtc;
 wire        quirk_memory_remap; // → memory_remap
 wire        quirk_sprite;     // → maxpixels
 
@@ -853,6 +1031,7 @@ cart_quirks quirks (
     .valid         ( det_cart_id_valid ),
     .sram_quirk    ( quirk_sram ),
     .gpio_quirk    ( quirk_gpio ),
+    .rtc_quirk     ( quirk_rtc ),
     .tilt_quirk    (),
     .solar_quirk   (),
     .memory_remap  ( quirk_memory_remap ),
@@ -888,9 +1067,8 @@ sync_fifo #(.WIDTH(64)) rtc_bcd_sync (
 );
 
 // ---- RTC Persistence ----
-// RTC data is appended as 5 x 16-bit words (10 bytes) after cart save data.
-// During boot load: snoop save_loader for RTC region, capture into registers.
-// During save writeback: override unloader data for RTC region addresses.
+// Slot 10 remains cart-save data only. Slot 11 is a fixed 16-byte RTC record;
+// legacy slot-10 footers are imported for migration but never exported there.
 
 // RTC outputs from gba_top (active during gameplay)
 wire [31:0] rtc_timestamp_out;
@@ -902,44 +1080,6 @@ wire        rtc_inuse;
 // so use the default 64 KB to ensure EEPROM data is persisted.
 wire [23:0] save_size_sys = det_flash_1m  ? 24'h02_0000 :  // 128 KB
                                             24'h01_0000;   // 64 KB
-
-// RTC data captured during save loading
-reg [31:0] rtc_loaded_timestamp;
-reg [41:0] rtc_loaded_savedtime;
-reg        rtc_data_captured;
-
-// Snoop save_loader writes for RTC region (bytes beyond save_size_sys)
-always @(posedge clk_sys) begin
-    if (~pll_core_locked) begin
-        rtc_data_captured    <= 0;
-        rtc_loaded_timestamp <= 32'd0;
-        rtc_loaded_savedtime <= 42'd0;
-    end else if (save_loader_wr && save_size_sys != 24'd0) begin
-        if (save_loader_addr[23:0] == save_size_sys)
-            begin rtc_loaded_timestamp[15:0] <= save_loader_data; rtc_data_captured <= 1; end
-        if (save_loader_addr[23:0] == save_size_sys + 24'd2)
-            rtc_loaded_timestamp[31:16] <= save_loader_data;
-        if (save_loader_addr[23:0] == save_size_sys + 24'd4)
-            rtc_loaded_savedtime[15:0] <= save_loader_data;
-        if (save_loader_addr[23:0] == save_size_sys + 24'd6)
-            rtc_loaded_savedtime[31:16] <= save_loader_data;
-        if (save_loader_addr[23:0] == save_size_sys + 24'd8)
-            rtc_loaded_savedtime[41:32] <= save_loader_data[9:0];
-    end else if (!rtc_data_captured && dataslot_allcomplete_s && rtc_bcd_received) begin
-        // No save RTC data — seed from Pocket's real-time clock
-        rtc_loaded_savedtime <= {
-            rtc_bcd_s[55:48],     // [41:34] year BCD
-            rtc_bcd_s[44:40],     // [33:29] month BCD (5b)
-            rtc_bcd_s[37:32],     // [28:23] day BCD (6b)
-            rtc_bcd_s[26:24],     // [22:20] weekday (3b)
-            rtc_bcd_s[21:16],     // [19:14] hour BCD (6b)
-            rtc_bcd_s[14:8],      // [13:7]  minute BCD (7b)
-            rtc_bcd_s[6:0]        // [6:0]   second BCD (7b)
-        };
-        rtc_loaded_timestamp <= rtc_epoch_s;  // matches current time -> diffSeconds = 0
-        rtc_data_captured    <= 1;            // allows rtc_save_loaded to fire
-    end
-end
 
 // Track whether OS has sent RTC epoch time (0x0090 arrives AFTER 0x008F/allcomplete)
 reg rtc_epoch_received;
@@ -959,16 +1099,60 @@ always @(posedge clk_sys) begin
         rtc_bcd_received <= 1;
 end
 
-// Assert rtc_save_loaded after boot completes, RTC data captured, AND epoch received.
-// All three are levels (stay high once set), so order of 0x008F vs 0x0090 doesn't matter.
-// This ensures RTC_timestamp is valid before gba_gpioRTCSolarGyro computes diffSeconds.
+wire [41:0] rtc_pocket_savedtime = {
+    rtc_bcd_s[55:48],
+    rtc_bcd_s[44:40],
+    rtc_bcd_s[37:32],
+    rtc_bcd_s[26:24],
+    rtc_bcd_s[21:16],
+    rtc_bcd_s[14:8],
+    rtc_bcd_s[6:0]
+};
+
+wire [31:0] rtc_loaded_timestamp;
+wire [41:0] rtc_loaded_savedtime;
+wire rtc_load_complete;
+wire rtc_sidecar_valid;
+wire rtc_legacy_valid;
+
+rtc_persistence rtc_store (
+    .clk                    ( clk_sys ),
+    .reset_n                ( pll_core_locked ),
+    .loader_accept          ( save_candidate_accept ),
+    .loader_addr            ( save_loader_addr ),
+    .loader_data            ( save_loader_data ),
+    .save_size              ( save_size_sys ),
+    .finalize_load          ( loader_drained && rtc_epoch_received && rtc_bcd_received ),
+    .host_epoch             ( rtc_epoch_s ),
+    .host_savedtime         ( rtc_pocket_savedtime ),
+    .loaded_timestamp       ( rtc_loaded_timestamp ),
+    .loaded_savedtime       ( rtc_loaded_savedtime ),
+    .load_complete          ( rtc_load_complete ),
+    .sidecar_record_valid   ( rtc_sidecar_valid ),
+    .legacy_record_valid    ( rtc_legacy_valid )
+);
+
 reg rtc_save_loaded;
 always @(posedge clk_sys) begin
     if (~pll_core_locked)
         rtc_save_loaded <= 0;
-    else if (dataslot_allcomplete_s && rtc_data_captured && rtc_epoch_received)
+    else if (rtc_load_complete && rtc_epoch_received)
         rtc_save_loaded <= 1;
 end
+
+rtc_export rtc_exporter (
+    .clk                    ( clk_sys ),
+    .reset_n                ( pll_core_locked ),
+    .load_complete          ( rtc_load_complete ),
+    .loaded_timestamp       ( rtc_loaded_timestamp ),
+    .loaded_savedtime       ( rtc_loaded_savedtime ),
+    .rtc_save_loaded        ( rtc_save_loaded ),
+    .live_timestamp         ( rtc_timestamp_out ),
+    .live_savedtime         ( rtc_savedtime_out ),
+    .unloader_accept        ( save_unloader_rd && save_unload_is_rtc ),
+    .unloader_addr          ( save_unloader_addr ),
+    .unloader_word          ( rtc_unload_word )
+);
 
 // ---- CDC: dataslot_allcomplete → clk_sys ----
 wire dataslot_allcomplete_s;
@@ -986,31 +1170,12 @@ synch_3 s_core_reset(core_reset, core_reset_s, clk_sys);
 
 wire reset_gba = ~pll_core_locked | ~dataslot_allcomplete_s | ~reset_n_s | core_reset_s | ~save_mem_ready;
 
-// ---- BIOS Loading via data_loader → gba_top internal BRAM ----
+// ---- BIOS Loading via shared ingress → gba_top internal BRAM ----
 // BIOS (16 KB) loads from data slot 4 at address 0x3xxxxxxx
-// data_loader outputs 16-bit words; 16→32 converter feeds gba_top's bios_wr port
-wire        bios_loader_wr;
-wire [27:0] bios_loader_addr;
-wire [15:0] bios_loader_data;
-
-data_loader #(
-    .ADDRESS_MASK_UPPER_4   ( 4'h3 ),      // 0x3xxxxxxx (BIOS slot)
-    .ADDRESS_SIZE           ( 28 ),
-    .OUTPUT_WORD_SIZE       ( 2 ),          // 16-bit output
-    .WRITE_MEM_CLOCK_DELAY  ( 4 )           // BRAM is fast, minimal delay
-) bios_data_loader (
-    .clk_74a            ( clk_74a ),
-    .clk_memory         ( clk_sys ),
-
-    .bridge_wr          ( bridge_wr ),
-    .bridge_endian_little ( bridge_endian_little ),
-    .bridge_addr        ( bridge_addr ),
-    .bridge_wr_data     ( bridge_wr_data ),
-
-    .write_en           ( bios_loader_wr ),
-    .write_addr         ( bios_loader_addr ),
-    .write_data         ( bios_loader_data )
-);
+// The ingress outputs 16-bit words; this converter feeds the 32-bit BIOS BRAM.
+wire        bios_loader_wr = ingress_accept && ingress_dest == INGRESS_BIOS;
+wire [27:0] bios_loader_addr = ingress_addr;
+wire [15:0] bios_loader_data = ingress_data;
 
 // BIOS 16→32 converter — gba_top has internal 4096×32-bit BIOS BRAM.
 // data_loader outputs 16-bit words; we buffer pairs to write 32-bit.
@@ -1275,7 +1440,7 @@ end
 // Matches the pattern used by the GBC reference core (budude2/openfpga-GBC).
 // All logic in clk_74a domain (same clock as mf_datatable).
 
-// CDC: flash_1m, sram_quirk, gpio_quirk from clk_sys → clk_74a (stable after download)
+// CDC: detected save/RTC characteristics from clk_sys → clk_74a.
 wire flash_1m_s;
 synch_3 flash_1m_sync (
     .i   ( det_flash_1m ),
@@ -1283,10 +1448,10 @@ synch_3 flash_1m_sync (
     .clk ( clk_74a )
 );
 
-wire gpio_quirk_s;
-synch_3 gpio_quirk_sync (
-    .i   ( quirk_gpio ),
-    .o   ( gpio_quirk_s ),
+wire rtc_quirk_s;
+synch_3 rtc_quirk_sync (
+    .i   ( quirk_rtc ),
+    .o   ( rtc_quirk_s ),
     .clk ( clk_74a )
 );
 
@@ -1298,11 +1463,10 @@ synch_3 gpio_quirk_sync (
 // sram_quirk games still get 64 KB: the quirk only disables SRAM/Flash at 0xE,
 // but many (e.g. Dragon Ball Z titles) use EEPROM at 0xD for actual saves.
 // bus_out FSM packs save bytes densely (1 byte per PSRAM byte), so these
-// sizes match the actual save type sizes. No 4× DWORD expansion.
-// Only add 16 bytes for RTC data when the game uses GPIO/RTC or force_rtc is on.
-wire        rtc_active = gpio_quirk_s | force_rtc;
-wire [31:0] save_size_bytes = flash_1m_s ? (32'h0002_0000 + (rtc_active ? 32'd16 : 32'd0)) :
-                                           (32'h0001_0000 + (rtc_active ? 32'd16 : 32'd0));
+// sizes match the actual save type sizes. RTC is a separate fixed-size slot.
+wire        rtc_active = rtc_quirk_s | force_rtc;
+wire [31:0] save_size_bytes = flash_1m_s ? 32'h0002_0000 : 32'h0001_0000;
+wire [31:0] rtc_size_bytes = rtc_active ? 32'd16 : 32'd0;
 
 // Continuously drive datatable port A with save size.
 // Writing every cycle is intentional: the Pocket OS may write to the same
@@ -1310,14 +1474,17 @@ wire [31:0] save_size_bytes = flash_1m_s ? (32'h0002_0000 + (rtc_active ? 32'd16
 // Continuous writes ensure the core's value is always current when the OS reads
 // it on core exit for save writeback. This is just a BRAM write port — no cost.
 // Matches the pattern used by the GBC reference core (budude2/openfpga-GBC).
+reg datatable_rtc_phase;
 always @(posedge clk_74a) begin
     if (~pll_core_locked_s) begin
         datatable_addr_r <= 10'd0;
         datatable_data_r <= 32'd0;
         datatable_wren_r <= 1'b0;
+        datatable_rtc_phase <= 1'b0;
     end else begin
-        datatable_addr_r <= 10'd5;          // save slot index 2: 2*2+1 = 5
-        datatable_data_r <= save_size_bytes;
+        datatable_rtc_phase <= ~datatable_rtc_phase;
+        datatable_addr_r <= datatable_rtc_phase ? 10'd7 : 10'd5;
+        datatable_data_r <= datatable_rtc_phase ? rtc_size_bytes : save_size_bytes;
         datatable_wren_r <= 1'b1;
     end
 end
@@ -1327,12 +1494,17 @@ end
 reg [1:0] ff_mode = 0;    // 0 = Hold, 1 = Toggle, 2 = Disabled
 reg force_rtc = 0;        // 0 = Off, 1 = Force enable RTC/GPIO
 reg [1:0] turbo_mode = 0; // 0 = Disabled, 1 = Turbo A, 2 = Turbo B
+reg ff_video_stable = 1'b1; // 0 = Classic FF, 1 = wait for complete rendered lines
 
 `ifdef ANALOGIZER_ENABLE
 // Analogizer settings — written by interact.json at 0xA0000000
+// bits[4:0]   = SNAC controller type: 0=None, 3=SNES
+// bit[6]      = SNAC only: ignore Pocket/dock controls while SNAC is active
+// bit[8]      = SNAC face buttons: 0=A/B, 1=B/Y act as GBA A/B
+// bit[9]      = SNAC Fast Forward/Turbo buttons off
 // bits[13:10] = video type: 0=RGBS,1=RGsB,3=Y/C NTSC,4=Y/C PAL,+8=Pocket OFF
 reg [13:0] analogizer_settings = 14'd0;
-// CRT scale mode — written by interact.json at 0x8C
+// CRT scale mode — written by interact.json at 0x90
 // 0=Debug 1x, 1=Aspect/Normal, 2=Wide/Overscan, 3=Aspect/Blend, 4=Scaled Full Width, 5=Full Screen/Square
 reg [2:0] crt_scale_mode = 3'd4;
 `endif
@@ -1347,18 +1519,19 @@ always @(posedge clk_74a) begin
     if (bridge_wr) begin
         casex (bridge_addr)
         32'hF0000000: reset_counter <= 14'd8000;  // ~108 us at 74.25 MHz
-        32'h80: ff_mode    <= bridge_wr_data[1:0];
-        32'h84: force_rtc  <= bridge_wr_data[0];
-        32'h88: turbo_mode <= bridge_wr_data[1:0];
+        32'h80: ff_mode         <= bridge_wr_data[1:0];
+        32'h84: force_rtc       <= bridge_wr_data[0];
+        32'h88: turbo_mode      <= bridge_wr_data[1:0];
+        32'h8C: ff_video_stable <= bridge_wr_data[0];
 `ifdef ANALOGIZER_ENABLE
         32'hA0000000: analogizer_settings <= bridge_wr_data[13:0];
-        32'h8C:       crt_scale_mode      <= bridge_wr_data[2:0];
+        32'h90:       crt_scale_mode      <= bridge_wr_data[2:0];
 `endif
         endcase
     end
 end
 
-// ---- CDC: ff_mode, force_rtc, turbo_mode → clk_sys ----
+// ---- CDC: menu config → clk_sys ----
 wire [1:0] ff_mode_s;
 synch_3 #(.WIDTH(2)) ff_mode_sync(ff_mode, ff_mode_s, clk_sys);
 
@@ -1367,6 +1540,9 @@ synch_3 force_rtc_sync(force_rtc, force_rtc_s, clk_sys);
 
 wire [1:0] turbo_mode_s;
 synch_3 #(.WIDTH(2)) turbo_mode_sync(turbo_mode, turbo_mode_s, clk_sys);
+
+wire ff_video_stable_s;
+synch_3 ff_video_stable_sync(ff_video_stable, ff_video_stable_s, clk_sys);
 
 // ============================================================
 // Section 4: Video Output — framebuffer + raster scan
@@ -1429,6 +1605,26 @@ wire [3:0] analogizer_video_type = analogizer_settings_s[13:10];
 // crt_scale_mode is in clk_74a domain; sync to clk_vid for gba_analogizer_video.
 wire [2:0] crt_scale_mode_vid;
 synch_3 #(.WIDTH(3)) sync_crt_scale (crt_scale_mode, crt_scale_mode_vid, clk_vid);
+
+// SNAC controller buttons from the Analogizer, Pocket key layout, clk_vid
+// domain. The reader holds them at zero unless SNES is selected.
+wire [4:0]  snac_type      = analogizer_settings_s[4:0];
+wire [15:0] snac_p1_btn;
+reg  [15:0] snac_keys_vid;
+reg         snac_only_vid;
+
+always @(posedge clk_vid) begin
+    snac_only_vid <= (snac_type == 5'd3) && analogizer_settings_s[6];
+    snac_keys_vid <= snac_p1_btn;
+    if (analogizer_settings_s[8]) begin
+        snac_keys_vid[4] <= snac_p1_btn[5];  // SNES B -> GBA A
+        snac_keys_vid[5] <= snac_p1_btn[7];  // SNES Y -> GBA B
+        snac_keys_vid[6] <= snac_p1_btn[4];  // SNES A -> Turbo
+        snac_keys_vid[7] <= snac_p1_btn[6];  // SNES X -> Fast Forward
+    end
+    if (analogizer_settings_s[9])
+        snac_keys_vid[7:6] <= 2'b00;
+end
 // Pocket OFF when bit[3] of video type is set (types 8-15).
 // Send a full black frame with normal scaler timing before disabling the
 // Pocket-facing stream, otherwise the Pocket/dock can hold the last frame.
@@ -1513,9 +1709,18 @@ synch_3 #(.WIDTH(32)) cont1_sync (
 // GBA buttons — active-high (1 = pressed), matching gba_top.vhd Key* ports
 // Pocket cont1_key is also active-high, so no inversion needed
 // Pocket bitmap: [0]=up [1]=down [2]=left [3]=right [4]=A [5]=B [6]=X [7]=Y [8]=L1 [9]=R1 [14]=sel [15]=start
+`ifdef ANALOGIZER_ENABLE
+// Analogizer SNAC controller uses the same bitmap and is ORed in, or replaces
+// the Pocket controls when "SNAC only" is selected.
+wire [16:0] snac_keys_s;
+synch_3 #(.WIDTH(17)) snac_keys_sync({snac_only_vid, snac_keys_vid}, snac_keys_s, clk_sys);
+wire [15:0] pad_keys = (snac_keys_s[16] ? 16'h0 : cont1_key_s[15:0]) | snac_keys_s[15:0];
+`else
+wire [15:0] pad_keys = cont1_key_s[15:0];
+`endif
 
 // X button (bit 6) — Turbo, not a GBA button
-wire x_button = cont1_key_s[6];
+wire x_button = pad_keys[6];
 
 // Turbo: free-running counter, bit[20] toggles at ~48 Hz → ~24 presses/sec
 reg [20:0] turbo_counter = 0;
@@ -1526,22 +1731,22 @@ wire turbo_pulse = turbo_counter[20];
 wire turbo_a = (turbo_mode_s == 2'd1) && x_button && turbo_pulse;
 wire turbo_b = (turbo_mode_s == 2'd2) && x_button && turbo_pulse;
 
-wire key_a      = cont1_key_s[4] | turbo_a;
-wire key_b      = cont1_key_s[5] | turbo_b;
-wire key_select = cont1_key_s[14];
-wire key_start  = cont1_key_s[15];
-wire key_up     = cont1_key_s[0];
-wire key_down   = cont1_key_s[1];
-wire key_left   = cont1_key_s[2];
-wire key_right  = cont1_key_s[3];
-wire key_r      = cont1_key_s[9];
-wire key_l      = cont1_key_s[8];
+wire key_a      = pad_keys[4] | turbo_a;
+wire key_b      = pad_keys[5] | turbo_b;
+wire key_select = pad_keys[14];
+wire key_start  = pad_keys[15];
+wire key_up     = pad_keys[0];
+wire key_down   = pad_keys[1];
+wire key_left   = pad_keys[2];
+wire key_right  = pad_keys[3];
+wire key_r      = pad_keys[9];
+wire key_l      = pad_keys[8];
 
 // Y button (bit 7) — Fast Forward, not a GBA button
 // Hold mode: active while button pressed
 // Toggle mode: press toggles on/off
 // Disabled mode: fast forward button does nothing
-wire ff_button = cont1_key_s[7];
+wire ff_button = pad_keys[7];
 
 reg ff_button_prev = 0;
 reg ff_toggle_state = 0;
@@ -1553,9 +1758,12 @@ always @(posedge clk_sys) begin
         ff_toggle_state <= ~ff_toggle_state;
 end
 
-wire fast_forward = (ff_mode_s == 2'd2) ? 1'b0 :            // Disabled
-                    (ff_mode_s == 2'd1) ? ff_toggle_state :  // Toggle
-                    ff_button;                               // Hold (default)
+wire fast_forward_requested = (ff_mode_s == 2'd2) ? 1'b0 :            // Disabled
+                              (ff_mode_s == 2'd1) ? ff_toggle_state :  // Toggle
+                              ff_button;                               // Hold (default)
+// Real accessories continue in wall time. Hold the CPU at native speed while
+// a Normal/GPIO/JoyBus transaction is active or within its idle guard window.
+wire fast_forward = fast_forward_requested & ~serial_link_active;
 
 
 // ============================================================
@@ -1639,6 +1847,7 @@ gba_top #(
     // Settings
     .GBA_on              ( ~reset_gba ),
     .GBA_lockspeed       ( ~fast_forward ),
+    .GBA_stable_ff_video ( ff_video_stable_s ),
     .GBA_cputurbo        ( 1'b0 ),
     .GBA_flash_1m        ( det_flash_1m ),
     .CyclePrecalc        ( 16'd100 ),
@@ -1653,7 +1862,7 @@ gba_top #(
     .load_state          ( ss_load ),
     .maxpixels           ( quirk_sprite ),
     .specialmodule       ( quirk_gpio | force_rtc_s ),
-    // solar/tilt/rumble removed to save ALMs
+    .Rumble              ( cart_rumble ),
     .savestate_number    ( 0 ),
     // RTC
     .RTC_timestampNew    ( rtc_new_s ),
@@ -1676,6 +1885,7 @@ gba_top #(
     .bus_out_Adr         ( bus_out_Adr ),
     .bus_out_rnw         ( bus_out_rnw ),
     .bus_out_ena         ( bus_out_ena ),
+    .bus_out_be          ( bus_out_be ),
     .bus_out_done        ( bus_out_done ),
     // Save state — connected to save_state_controller
     .SAVE_out_Din        ( ss_din ),
@@ -1709,6 +1919,20 @@ gba_top #(
     .KeyR                ( key_r ),
     .KeyL                ( key_l ),
     // AnalogTiltX/Y and Rumble removed (solar/gyro/tilt/rumble stripped)
+    // Link cable pins — value, output-enable, and physical feedback per pin
+    .serial_so_out       ( serial_so_out ),
+    .serial_so_oe        ( serial_so_oe ),
+    .serial_so_in        ( serial_so_in ),
+    .serial_si_out       ( serial_si_out ),
+    .serial_si_oe        ( serial_si_oe ),
+    .serial_si_in        ( serial_si_in ),
+    .serial_sd_out       ( serial_sd_out ),
+    .serial_sd_oe        ( serial_sd_oe ),
+    .serial_sd_in        ( serial_sd_in ),
+    .serial_sc_out       ( serial_sc_out ),
+    .serial_sc_oe        ( serial_sc_oe ),
+    .serial_sc_in        ( serial_sc_in ),
+    .serial_link_active  ( serial_link_active ),
     // Debug (unused)
     .GBA_BusAddr         ( 28'd0 ),
     .GBA_BusRnW          ( 1'b0 ),
@@ -1816,8 +2040,8 @@ openFPGA_Pocket_Analogizer #(
     .scandoubler        (1'b0),
     .fx                 (3'd0),
     .conf_AB            (1'b0),
-    .game_cont_type     (5'd0),
-    .p1_btn_state       (),
+    .game_cont_type     (snac_type),
+    .p1_btn_state       (snac_p1_btn),
     .p1_joy_state       (),
     .p2_btn_state       (),
     .p2_joy_state       (),

@@ -5,7 +5,7 @@ GBA core for the Analogue Pocket (openFPGA), with a second Analogizer build that
 ## Layout
 
 - `src/fpga/core/` — core RTL. `core_top.sv` holds the top level and the Analogizer raster timing. `gba_analogizer_video.sv` handles CRT scale modes.
-- `src/fpga/analogizer/` — Analogizer adapter glue and the Y/C encoder (`yc_out.sv`).
+- `src/fpga/analogizer/` — Analogizer adapter glue, the Y/C encoder (`yc_out.sv`) and the SNES SNAC reader (`snac_snes.sv`, see `docs/analogizer-snac-snes.md`).
 - `src/fpga/build/` — Quartus project (`gba_pocket.qpf`, `ap_core*.qsf`). `output_files/`, `db/` and `incremental_db/` are generated.
 - `pkg/Cores/Orbitoid.GBA_Analogizer/` — Analogizer core package (JSON definitions; `interact.json` is the menu).
 - `pkg/Cores/mincer_ray.GBA/` — normal Pocket core package.
@@ -26,6 +26,7 @@ A full compile takes several minutes. Don't start one unless the user asks, or u
 ## Verifying changes
 
 - A build counts as passing only if the timing summary reports "Timing met." Check the per-clock setup slack, and the SDRAM paths in `build_output/reports/` when memory timing is involved.
+- The Analogizer revision is closed against upstream with pinned clocks, a fitter-only margin SDC and a chosen seed. `docs/analogizer-timing-closure.md` has the baseline numbers and what to redo after an RTL change.
 - Video, Y/C and CRT changes can't be fully checked without hardware. Say what needs testing on a real Pocket or CRT. `docs/analogizer-crt-scaling-calibration.md` is the checklist for scale modes.
 - When `interact.json` changes, keep its option values in sync with the RTL that decodes them.
 

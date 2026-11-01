@@ -1,6 +1,7 @@
 // Stripped-down Analogizer wrapper for the GBA core.
-// Supports RGBS, RGsB, and Y/C (NTSC/PAL) output only.
-// No scandoubler, no HQ2x, no SNAC, no YPbPr.
+// Supports RGBS, RGsB, and Y/C (NTSC/PAL) output, plus a SNES controller on
+// the SNAC port (game_cont_type 3, configuration A).
+// No scandoubler, no HQ2x, no YPbPr, no other SNAC controller types.
 // Saves ~1,100 ALMs vs the full openFPGA_Pocket_Analogizer.v.
 //
 // analog_video_type bits[2:0] (bit[3]=Pocket-OFF, handled upstream):
@@ -40,7 +41,7 @@ module openFPGA_Pocket_Analogizer #(
     input  wire        ce_pix,
     input  wire        scandoubler,
     input  wire [2:0]  fx,
-    // SNAC — unused
+    // SNAC — only game_cont_type 3 (SNES) is implemented; conf_AB is ignored
     input  wire        conf_AB,
     input  wire [4:0]  game_cont_type,
     output wire [15:0] p1_btn_state,
@@ -74,8 +75,27 @@ module openFPGA_Pocket_Analogizer #(
     output wire        o_stb
 );
 
+// SNES controller on the SNAC port, configuration A:
+//   OUT1 (D-)  = CLK   -> cart_tran_bank1[6]
+//   OUT2 (D+)  = LATCH -> cart_tran_bank1[7]
+//   IO5        = CLK2  -> cart_tran_pin30 (second port on splitter adapters)
+//   IO3 (RX-)  = DATA  <- cart_tran_bank0[4]
+wire snac_snes_ena = (game_cont_type == 5'd3);
+wire snac_clk, snac_lat;
+
+snac_snes #(
+    .MASTER_CLK_FREQ(MASTER_CLK_FREQ)
+) snac (
+    .i_clk    (i_clk),
+    .i_rst    (i_rst),
+    .i_ena    (snac_snes_ena),
+    .btn_state(p1_btn_state),
+    .o_clk    (snac_clk),
+    .o_lat    (snac_lat),
+    .i_dat    (cart_tran_bank0[4])
+);
+
 // Tie off unused output ports
-assign p1_btn_state = 16'h0;
 assign p1_joy_state = 32'h0;
 assign p2_btn_state = 16'h0;
 assign p2_joy_state = 32'h0;
@@ -141,21 +161,22 @@ always @(*) begin
 end
 
 // Cartridge port tri-state buffers
-// BK0 — SNAC conf pins (unused here, drive high as safe output)
-assign cart_tran_bank0     = (i_rst | ~i_ena) ? 4'hf : 4'hf;
-assign cart_tran_bank0_dir = (i_rst | ~i_ena) ? 1'b1 : 1'b1;
+// BK0 — SNAC inputs (drive high as a safe output while in reset)
+assign cart_tran_bank0     = (i_rst | ~i_ena) ? 4'hf : 4'hz;
+assign cart_tran_bank0_dir = (i_rst | ~i_ena) ? 1'b1 : 1'b0;
 // BK3 — {R[5:0], HS, VS}
 assign cart_tran_bank3     = (i_rst | ~i_ena) ? 8'hzz : {Rout[5:0], HsyncOut, VsyncOut};
 assign cart_tran_bank3_dir = (i_rst | ~i_ena) ? 1'b0  : 1'b1;
 // BK2 — {B[0], BLANKn, G[5:0]}
 assign cart_tran_bank2     = (i_rst | ~i_ena) ? 8'hzz : {Bout[0], BLANKnOut, Gout[5:0]};
 assign cart_tran_bank2_dir = (i_rst | ~i_ena) ? 1'b0  : 1'b1;
-// BK1 — {2'b00 (SNAC unused), CLK, B[5:1]}
-assign cart_tran_bank1     = (i_rst | ~i_ena) ? 8'hzz : {2'b00, video_clk, Bout[5:1]};
+// BK1 — {SNAC LATCH, SNAC CLK, video CLK, B[5:1]}
+assign cart_tran_bank1     = (i_rst | ~i_ena) ? 8'hzz : {snac_lat, snac_clk, video_clk, Bout[5:1]};
 assign cart_tran_bank1_dir = (i_rst | ~i_ena) ? 1'b0  : 1'b1;
-// PIN30 / PIN31 — unused in video-only mode
-assign cart_tran_pin30         = 1'bz;
-assign cart_tran_pin30_dir     = 1'b0;
+// PIN30 — SNAC CLK2 output while SNES is selected, otherwise input
+// PIN31 — unused
+assign cart_tran_pin30         = (i_rst | ~i_ena | ~snac_snes_ena) ? 1'bz : snac_clk;
+assign cart_tran_pin30_dir     = (i_rst | ~i_ena | ~snac_snes_ena) ? 1'b0 : 1'b1;
 assign cart_pin30_pwroff_reset = (i_rst | ~i_ena) ? 1'b0 : 1'b1;
 assign cart_tran_pin31         = 1'bz;
 assign cart_tran_pin31_dir     = 1'b0;

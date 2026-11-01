@@ -20,7 +20,8 @@ entity gba_gpioRTCSolarGyro is
       GPIO_Dout            : in     std_logic_vector(3 downto 0);  --
       GPIO_writeEna        : in     std_logic;                     -- request pulse coming together with address, no response required
       GPIO_addr            : in     std_logic_vector(1 downto 0);  -- 0..2 for 0x80000C4..0x80000C8
-   
+      GPIO_readable        : out    std_logic;                     -- read-enable bit (0x80000C8 bit 0): 0 = reads return ROM data
+
       vblank_trigger       : in     std_logic;  
       RTC_timestampNew     : in     std_logic;                     -- new current timestamp from system
       RTC_timestampIn      : in     std_logic_vector(31 downto 0); -- timestamp in seconds, current time
@@ -30,8 +31,8 @@ entity gba_gpioRTCSolarGyro is
       RTC_timestampOut     : out    std_logic_vector(31 downto 0); -- timestamp to be saved
       RTC_savedtimeOut     : out    std_logic_vector(41 downto 0); -- time structure to be saved
       RTC_inuse            : out    std_logic := '0';              -- will indicate that RTC is in use and should be saved on next saving
-   
-      dummy                : in     std_logic := '0'
+
+      rumble               : out    std_logic := '0'
    );
 end entity;
 
@@ -114,6 +115,8 @@ begin
    
    SAVESTATE_GPIOBITS_BACK <= std_logic_vector(bits);
 
+   GPIO_readable <= enable;
+
    process (clk100)
       variable new_command : std_logic_vector(7 downto 0);
    begin
@@ -145,6 +148,8 @@ begin
             state     <= GPIOState'VAL(to_integer(unsigned(SAVESTATE_GPIO(29 downto 28))));
             
             bits      <= unsigned(SAVESTATE_GPIOBITS(21 downto 16));
+
+            rumble    <= '0';
 
             saveRTC   <= '0';
             
@@ -191,9 +196,17 @@ begin
                      
                   when "01" => -- 0x80000c6
                      selected <= GPIO_Dout;
-               
+                     if (GPIO_Dout(3) = '0') then
+                        rumble <= '0';
+                     end if;
+
                   when "00" => -- 0x80000c4
-               
+
+                     -- rumble
+                     if (selected(3) = '1') then
+                        rumble <= GPIO_Dout(3);
+                     end if;
+
                      -- RTC
                      --if (selected(2) = '1') then -- don't check for clock as Sennen Kazoku doesn't handle it "correct"
                      
