@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(./scripts/build.sh)",
+      "Bash(./scripts/build_analogizer.sh)",
+      "Bash(./scripts/quartus-build-bg.sh *)",
+      "Bash(./scripts/print_timing.sh *)",
+      "Bash(./scripts/watch-build.sh)",
+      "Bash(gh run list *)",
+      "Bash(gh run view *)",
+      "Bash(gh run watch *)",
+      "Bash(gh run download *)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:api.github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:openfpga-library.github.io)"
+    ],
+    "ask": [
+      "Bash(git push *)",
+      "Bash(gh workflow run *)",
+      "Bash(gh release *)"
+    ]
+  }
+}

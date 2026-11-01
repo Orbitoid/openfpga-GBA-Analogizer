@@ -188,7 +188,7 @@ start_build() {
   echo "Started background Quartus build."
   print_summary
   echo ""
-  echo "Continue working in this OpenCode session. When you want to rejoin the build result, run:"
+  echo "The build continues in the background. To block until it finishes and print the result, run:"
   echo "  $0$TARGET_ARG wait"
 }
 

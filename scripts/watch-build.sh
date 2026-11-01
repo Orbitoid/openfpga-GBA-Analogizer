@@ -4,7 +4,7 @@ set -euo pipefail
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 
 echo "Finding latest build run on branch '$BRANCH'..."
-RUN_ID=$(gh run list --workflow=build.yml --branch="$BRANCH" --limit=1 --json databaseId --jq '.[0].databaseId')
+RUN_ID=$(gh run list --workflow=build-branch.yml --branch="$BRANCH" --limit=1 --json databaseId --jq '.[0].databaseId')
 
 if [ -z "$RUN_ID" ]; then
   echo "No workflow runs found for branch '$BRANCH'."
@@ -17,7 +17,7 @@ gh run watch "$RUN_ID"
 STATUS=$(gh run view "$RUN_ID" --json conclusion --jq '.conclusion')
 if [ "$STATUS" != "success" ]; then
   echo "Build failed (status: $STATUS)."
-  echo "Download debug artifacts with: gh run download $RUN_ID -n debug-output"
+  echo "Download timing and reports with: gh run download $RUN_ID -n timing -n reports -D build_output"
   exit 1
 fi
 

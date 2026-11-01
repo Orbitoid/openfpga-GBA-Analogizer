@@ -1,5 +1,9 @@
 # Analogizer Y/C Color Handover
 
+## Status
+
+The back-porch and colorburst fix described under "Applied Fix" shipped in v0.4.5 (`4d78448`). It still needs confirmation on the tester's Y/C and PAL-M setup. If color is still missing, the next steps are in "Suggested Tester Instructions".
+
 ## Problem
 
 A tester using Mike's Y/C adapter reports that the GBA Analogizer core outputs a stable black-and-white image in Y/C modes. Their PAL-M TV normally shows NTSC/PAL inputs as black-and-white, but they use an NTSC-to-PAL-M transcoder. That same transcoder setup produces color with other Analogizer cores when choosing `Y/C NTSC`, but not with this GBA core.
@@ -8,7 +12,7 @@ Local RGBS output works. Local Y/C testing through an RGB/OSSC path only appears
 
 The most likely remaining cause is invalid or misplaced Y/C colorburst timing. Stable monochrome means sync and luma are likely present, while chroma decode/colorburst lock is failing.
 
-## Current Code State
+## Code State Before v0.4.5
 
 Relevant files:
 
@@ -78,9 +82,9 @@ GBC Analogizer:
 
 GBA differs because it drives `yc_out` at only `8.388608 MHz`, making the existing `yc_out` burst counters far too late in real time.
 
-## Recommended Next Fix
+## Applied Fix (v0.4.5)
 
-Make one test build that directly addresses colorburst/back-porch timing:
+This test build targets the colorburst and back-porch timing directly:
 
 1. Keep `H_TOTAL=536` to preserve the line rate near `15.65 kHz`.
 2. Reduce `H_ACTIVE` from `480` to `432`.
@@ -90,7 +94,7 @@ Make one test build that directly addresses colorburst/back-porch timing:
 6. Reduce the widest image mode so it does not run into blanking/colorburst time.
 7. Add a low-clock Y/C burst override in `yc_out.sv`, likely for `MASTER_CLK_FREQ == 8_388_608` or by detecting this large `PHASE_INC[39:32]` case.
 
-Suggested image width changes in `gba_analogizer_video.sv`:
+Image width change in `gba_analogizer_video.sv`:
 
 ```verilog
 localparam [9:0] IMG_W_WIDE   = 10'd416; // was 448
@@ -98,7 +102,7 @@ localparam [9:0] IMG_W_WIDE   = 10'd416; // was 448
 
 `IMG_W_LARGE=408` can probably stay as-is. Check `H_CENTER_OFFSET=6`; with `H_ACTIVE=432`, `IMG_W_WIDE=416` gives about 8 clocks nominal margin before the offset, and `IMG_W_LARGE=408` gives more margin.
 
-Suggested timing in `core_top.sv`:
+Timing in `core_top.sv`:
 
 ```verilog
 .H_TOTAL         (536),
@@ -108,7 +112,7 @@ Suggested timing in `core_top.sv`:
 // H_BP = 536 - 432 - 4 - 36 = 64
 ```
 
-Suggested low-clock burst timing in `yc_out.sv`:
+Low-clock burst timing in `yc_out.sv`:
 
 ```verilog
 cburst_start  <= 10'd4;
@@ -135,15 +139,3 @@ Ask Jonas to test:
 - A saturated/colorful scene if possible, because chroma failure is easiest to see there.
 
 If still black-and-white, ask whether the transcoder or capture device indicates NTSC color lock. If they have a scope, ask them to check for a colorburst packet on the back porch after each HSync.
-
-## Prompt For Next Agent
-
-```text
-We are in /home/orbit/Active workspaces/openfpga-GBA. Please continue debugging the GBA Analogizer Y/C black-and-white issue documented in docs/analogizer-yc-color-handover.md.
-
-Context: A tester using Mike's Y/C adapter and an NTSC-to-PAL-M transcoder gets color from other Analogizer cores in Y/C NTSC, but this GBA Analogizer core remains black-and-white. We already inverted HSync into yc_out in src/fpga/analogizer/openFPGA_Pocket_Analogizer_GBA.v so yc_out sees active-high hsync for colorburst timing, but it did not fix the issue.
-
-Please implement the next test fix: keep H_TOTAL at 536, reduce GBA Analogizer H_ACTIVE from 480 to 432, reduce H_SYNC from 40 to 36, update the H_BP comment, reduce the widest image width in gba_analogizer_video.sv so it does not consume the new blanking area, and add a low-clock colorburst timing override in yc_out.sv for the GBA 8.388608 MHz Y/C clock so burst starts around count 4 and ends around count 25. Keep changes minimal and explain the timing math in comments only where useful.
-
-After editing, review the diff and tell me what to build with ./scripts/build_analogizer.sh. Do not run a long Quartus build unless explicitly asked.
-```

@@ -7,7 +7,8 @@ Desktop.ini
 *.swp
 *.swo
 *~
-.claude/
+.claude/*
+!.claude/settings.json
 .vscode/
 .idea/
 
