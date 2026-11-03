@@ -1408,6 +1408,26 @@ core_bridge_cmd icb (
 );
 
 
+// ---- Interact menu config registers (clk_74a domain) ----
+reg [1:0] ff_mode = 0;    // 0 = Hold, 1 = Toggle, 2 = Disabled
+reg force_rtc = 0;        // 0 = Off, 1 = Force enable RTC/GPIO
+reg [1:0] turbo_mode = 0; // 0 = Disabled, 1 = Turbo A, 2 = Turbo B
+reg ff_video_stable = 1'b1; // 0 = Classic FF, 1 = wait for complete rendered lines
+
+`ifdef ANALOGIZER_ENABLE
+// Analogizer settings — interact.json at 0xA0000000, same bit layout as the
+// SNES Analogizer core. Readable, so the Pocket can merge the masked entries.
+// bits[4:0]   = SNAC adapter: 0x00=None, 0x03=SNES, 0x0B=SNES A,B<->X,Y
+// bits[9:6]   = SNAC assignment: 0=SNAC -> P1 (Pocket controls ignored),
+//               1=SNAC + Pocket -> P1
+// bits[13:10] = video type: 0=RGBS,1=RGsB,3=Y/C NTSC,4=Y/C PAL,+8=Pocket OFF
+reg [13:0] analogizer_settings = 14'd0;
+// CRT scale mode — written by interact.json at 0x90
+// 0=Debug 1x, 1=Aspect/Normal, 2=Wide/Overscan, 3=Aspect/Blend, 4=Scaled Full Width, 5=Full Screen/Square
+reg [2:0] crt_scale_mode = 3'd4;
+`endif
+
+
 // ============================================================
 // Section 3: Bridge Read Mux
 // ============================================================
@@ -1425,6 +1445,11 @@ always @(*) begin
     32'hF8xxxxxx: begin
         bridge_rd_data <= cmd_bridge_rd_data;
     end
+`ifdef ANALOGIZER_ENABLE
+    32'hA0000000: begin
+        bridge_rd_data <= {18'h0, analogizer_settings};
+    end
+`endif
     default: begin
         bridge_rd_data <= 0;
     end
@@ -1489,25 +1514,6 @@ always @(posedge clk_74a) begin
     end
 end
 
-
-// ---- Interact menu config registers (clk_74a domain) ----
-reg [1:0] ff_mode = 0;    // 0 = Hold, 1 = Toggle, 2 = Disabled
-reg force_rtc = 0;        // 0 = Off, 1 = Force enable RTC/GPIO
-reg [1:0] turbo_mode = 0; // 0 = Disabled, 1 = Turbo A, 2 = Turbo B
-reg ff_video_stable = 1'b1; // 0 = Classic FF, 1 = wait for complete rendered lines
-
-`ifdef ANALOGIZER_ENABLE
-// Analogizer settings — written by interact.json at 0xA0000000
-// bits[4:0]   = SNAC controller type: 0=None, 3=SNES
-// bit[6]      = SNAC only: ignore Pocket/dock controls while SNAC is active
-// bit[8]      = SNAC face buttons: 0=A/B, 1=B/Y act as GBA A/B
-// bit[9]      = SNAC Fast Forward/Turbo buttons off
-// bits[13:10] = video type: 0=RGBS,1=RGsB,3=Y/C NTSC,4=Y/C PAL,+8=Pocket OFF
-reg [13:0] analogizer_settings = 14'd0;
-// CRT scale mode — written by interact.json at 0x90
-// 0=Debug 1x, 1=Aspect/Normal, 2=Wide/Overscan, 3=Aspect/Blend, 4=Scaled Full Width, 5=Full Screen/Square
-reg [2:0] crt_scale_mode = 3'd4;
-`endif
 
 reg [13:0] reset_counter = 0;
 wire       core_reset = (reset_counter != 0);
@@ -1609,21 +1615,21 @@ synch_3 #(.WIDTH(3)) sync_crt_scale (crt_scale_mode, crt_scale_mode_vid, clk_vid
 // SNAC controller buttons from the Analogizer, Pocket key layout, clk_vid
 // domain. The reader holds them at zero unless SNES is selected.
 wire [4:0]  snac_type      = analogizer_settings_s[4:0];
+wire        snac_swap      = (snac_type == 5'h0B);
+wire        snac_snes      = (snac_type == 5'h03) || snac_swap;
 wire [15:0] snac_p1_btn;
 reg  [15:0] snac_keys_vid;
 reg         snac_only_vid;
 
 always @(posedge clk_vid) begin
-    snac_only_vid <= (snac_type == 5'd3) && analogizer_settings_s[6];
+    snac_only_vid <= snac_snes && (analogizer_settings_s[9:6] == 4'd0);
     snac_keys_vid <= snac_p1_btn;
-    if (analogizer_settings_s[8]) begin
+    if (snac_swap) begin
         snac_keys_vid[4] <= snac_p1_btn[5];  // SNES B -> GBA A
         snac_keys_vid[5] <= snac_p1_btn[7];  // SNES Y -> GBA B
-        snac_keys_vid[6] <= snac_p1_btn[4];  // SNES A -> Turbo
-        snac_keys_vid[7] <= snac_p1_btn[6];  // SNES X -> Fast Forward
+        snac_keys_vid[6] <= snac_p1_btn[4];  // SNES A -> X (Turbo)
+        snac_keys_vid[7] <= snac_p1_btn[6];  // SNES X -> Y (Fast Forward)
     end
-    if (analogizer_settings_s[9])
-        snac_keys_vid[7:6] <= 2'b00;
 end
 // Pocket OFF when bit[3] of video type is set (types 8-15).
 // Send a full black frame with normal scaler timing before disabling the
@@ -1710,8 +1716,8 @@ synch_3 #(.WIDTH(32)) cont1_sync (
 // Pocket cont1_key is also active-high, so no inversion needed
 // Pocket bitmap: [0]=up [1]=down [2]=left [3]=right [4]=A [5]=B [6]=X [7]=Y [8]=L1 [9]=R1 [14]=sel [15]=start
 `ifdef ANALOGIZER_ENABLE
-// Analogizer SNAC controller uses the same bitmap and is ORed in, or replaces
-// the Pocket controls when "SNAC only" is selected.
+// Analogizer SNAC controller uses the same bitmap. "SNAC -> P1" replaces the
+// Pocket controls; "SNAC + Pocket -> P1" ORs them together.
 wire [16:0] snac_keys_s;
 synch_3 #(.WIDTH(17)) snac_keys_sync({snac_only_vid, snac_keys_vid}, snac_keys_s, clk_sys);
 wire [15:0] pad_keys = (snac_keys_s[16] ? 16'h0 : cont1_key_s[15:0]) | snac_keys_s[15:0];

@@ -8,21 +8,24 @@ and what to redo after an RTL change.
 The bar is the upstream mincer-ray release core built unchanged with its
 committed settings (v1.0.1, `ap_core`, SEED 4):
 
-| Metric                      | Upstream v1.0.1 | Analogizer (SEED 75) |
+| Metric                      | Upstream v1.0.1 | Analogizer (SEED 12) |
 |-----------------------------|-----------------|----------------------|
-| Worst setup slack           | +0.004 ns       | +0.119 ns            |
-| Worst hold slack            | +0.095 ns       | +0.120 ns            |
+| Worst setup slack           | +0.004 ns       | +0.062 ns            |
+| Worst hold slack            | +0.095 ns       | +0.038 ns            |
 | TNS                         | 0               | 0                    |
-| SDRAM read                  | +0.643          | +0.647               |
-| SDRAM write                 | +2.820          | +2.814               |
-| CRAM0 output setup / hold   | +0.494 / +5.707 | +0.494 / +5.707      |
-| CRAM0 input setup / hold    | +3.044 / +0.870 | +3.048 / +1.108      |
-| clk_74a / bridge_spiclk setup | +2.988 / +10.226 | +2.571 / +9.928   |
-| ALMs                        | 17,762 (96%)    | 18,031 (98%)         |
+| SDRAM read                  | +0.643          | +0.643               |
+| SDRAM write                 | +2.820          | +2.819               |
+| CRAM0 output setup / hold   | +0.494 / +5.707 | +0.496 / +5.705      |
+| CRAM0 input setup / hold    | +3.044 / +0.870 | +3.265 / +0.910      |
+| clk_74a / bridge_spiclk setup | +2.988 / +10.226 | +2.713 / +9.999   |
+| ALMs                        | 17,762 (96%)    | 18,094 (98%)         |
 
-SEED 75 came out of a sweep of about 130 seeds. No seed beat upstream on every
-row. SDRAM write is 6 ps lower because of the clock network delay described
-below. The clk_74a and bridge_spiclk rows are bridge-side paths with multiple
+SEED 12 is from the sweep after the SNAC menu rework (SNES-core layout and
+settings readback, +63 ALMs). It was the only one of seeds 1-60 to meet
+timing. Hold slack is below upstream's, though still positive. SDRAM write
+and CRAM0 output hold are 1-2 ps lower because of the clock network delay
+described below. Before that change, SEED 75 (from about 130 seeds) gave
+setup +0.119 / hold +0.120 ns. The clk_74a and bridge_spiclk rows are bridge-side paths with multiple
 nanoseconds of margin in both builds.
 
 Upstream has no Analogizer build, so this is the only baseline available. Our

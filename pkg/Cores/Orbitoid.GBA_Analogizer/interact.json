@@ -135,13 +135,56 @@
         ]
       },
       {
+        "name": "SNAC Adapter",
+        "id": 50,
+        "type": "list",
+        "enabled": true,
+        "address": "0xA0000000",
+        "persist": true,
+        "defaultval": 0,
+        "mask": "0xFFFFFFE0",
+        "options": [
+          {
+            "name": "None",
+            "value": 0
+          },
+          {
+            "name": "SNES",
+            "value": 3
+          },
+          {
+            "name": "SNES A,B<->X,Y",
+            "value": 11
+          }
+        ]
+      },
+      {
+        "name": "SNAC Controller Assignment",
+        "id": 51,
+        "type": "list",
+        "enabled": true,
+        "address": "0xA0000000",
+        "persist": true,
+        "defaultval": 0,
+        "mask": "0xFFFFFC3F",
+        "options": [
+          {
+            "name": "SNAC -> P1",
+            "value": 0
+          },
+          {
+            "name": "SNAC + Pocket -> P1",
+            "value": 64
+          }
+        ]
+      },
+      {
         "name": "Analogizer Video Out",
         "id": 40,
         "type": "list",
         "enabled": true,
         "address": "0xA0000000",
         "persist": true,
-        "writeonly": true,
         "defaultval": 0,
         "mask": "0xFFFFC3FF",
         "options": [
@@ -176,60 +219,6 @@
           {
             "name": "Y/C PAL, Pocket OFF",
             "value": 12288
-          }
-        ]
-      },
-      {
-        "name": "SNAC Controller",
-        "id": 45,
-        "type": "list",
-        "enabled": true,
-        "address": "0xA0000000",
-        "persist": true,
-        "writeonly": true,
-        "defaultval": 0,
-        "mask": "0xFFFFFF80",
-        "options": [
-          {
-            "name": "None",
-            "value": 0
-          },
-          {
-            "name": "SNES + Pocket",
-            "value": 3
-          },
-          {
-            "name": "SNES Only",
-            "value": 67
-          }
-        ]
-      },
-      {
-        "name": "SNAC Buttons",
-        "id": 46,
-        "type": "list",
-        "enabled": true,
-        "address": "0xA0000000",
-        "persist": true,
-        "writeonly": true,
-        "defaultval": 0,
-        "mask": "0xFFFFFCFF",
-        "options": [
-          {
-            "name": "A/B, X Turbo, Y FF",
-            "value": 0
-          },
-          {
-            "name": "B/Y, A Turbo, X FF",
-            "value": 256
-          },
-          {
-            "name": "A/B Only",
-            "value": 512
-          },
-          {
-            "name": "B/Y Only",
-            "value": 768
           }
         ]
       }

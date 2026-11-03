@@ -36,7 +36,23 @@ if command -v zip >/dev/null 2>&1; then
   )
   echo "Package: $PACKAGE"
 else
-  echo "zip not found; skipping package archive. Copy pkg/Cores, pkg/Platforms, and pkg/Assets to your SD card manually."
+  echo "=== Packaging SD card layout (python zipfile) ==="
+  rm -f "$PACKAGE"
+  python3 -I - "$PROJECT_DIR/pkg" "$PACKAGE" <<'PY'
+import os, sys, zipfile
+src, out = sys.argv[1], sys.argv[2]
+os.chdir(src)
+with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+    for top in ["Assets", "Platforms", "instructions.txt", "Cores/Orbitoid.GBA_Analogizer"]:
+        if os.path.isfile(top):
+            z.write(top)
+            continue
+        for root, _, files in os.walk(top):
+            z.write(root)
+            for f in files:
+                z.write(os.path.join(root, f))
+PY
+  echo "Package: $PACKAGE"
 fi
 
 echo "=== Done! ==="

@@ -1,6 +1,6 @@
 // Stripped-down Analogizer wrapper for the GBA core.
 // Supports RGBS, RGsB, and Y/C (NTSC/PAL) output, plus a SNES controller on
-// the SNAC port (game_cont_type 3, configuration A).
+// the SNAC port (game_cont_type 0x03 or 0x0B, configuration A).
 // No scandoubler, no HQ2x, no YPbPr, no other SNAC controller types.
 // Saves ~1,100 ALMs vs the full openFPGA_Pocket_Analogizer.v.
 //
@@ -41,7 +41,7 @@ module openFPGA_Pocket_Analogizer #(
     input  wire        ce_pix,
     input  wire        scandoubler,
     input  wire [2:0]  fx,
-    // SNAC — only game_cont_type 3 (SNES) is implemented; conf_AB is ignored
+    // SNAC — only game_cont_type 0x03/0x0B (SNES) is implemented; conf_AB is ignored
     input  wire        conf_AB,
     input  wire [4:0]  game_cont_type,
     output wire [15:0] p1_btn_state,
@@ -80,7 +80,8 @@ module openFPGA_Pocket_Analogizer #(
 //   OUT2 (D+)  = LATCH -> cart_tran_bank1[7]
 //   IO5        = CLK2  -> cart_tran_pin30 (second port on splitter adapters)
 //   IO3 (RX-)  = DATA  <- cart_tran_bank0[4]
-wire snac_snes_ena = (game_cont_type == 5'd3);
+// 0x0B (SNES A,B<->X,Y) reads the same pad; core_top does the button swap.
+wire snac_snes_ena = (game_cont_type == 5'h03) || (game_cont_type == 5'h0B);
 wire snac_clk, snac_lat;
 
 snac_snes #(

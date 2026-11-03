@@ -87,16 +87,15 @@ The Analogizer video path uses `clk_vid` timing at about 15.65 kHz / 59.7 Hz, pr
 
 The `GBA_Analogizer` core can read an original SNES controller through the Analogizer SNAC port, using a MiSTer-style SNES SNAC adapter (for example the retroremake SNES SNAC adapter) and a USB-A to USB-A cable. Only the first controller port of the adapter is used.
 
-Core settings:
+Core settings follow the layout of RndMnkIII's SNES Analogizer core:
 
-- **SNAC Controller**
+- **SNAC Adapter**
   - **None** — SNAC port not polled (default).
-  - **SNES + Pocket** — SNES controller and Pocket/dock controls both drive the GBA buttons.
-  - **SNES Only** — Pocket/dock controls are ignored while SNAC is active.
-- **SNAC Buttons**
-  - **A/B, X Turbo, Y FF** — SNES A/B are GBA A/B; X is the Turbo button and Y is Fast Forward, matching the Pocket layout.
-  - **B/Y, A Turbo, X FF** — SNES B/Y act as GBA A/B (the diagonal pair, closer to the GBA's button placement); A is Turbo and X is Fast Forward.
-  - **A/B Only** / **B/Y Only** — Same face-button layouts with Turbo and Fast Forward disabled on the SNES controller.
+  - **SNES** — SNES A/B are GBA A/B; X is the Turbo button and Y is Fast Forward, matching the Pocket layout.
+  - **SNES A,B<->X,Y** — SNES B/Y act as GBA A/B (the diagonal pair, closer to the GBA's button placement); A is Turbo and X is Fast Forward.
+- **SNAC Controller Assignment**
+  - **SNAC -> P1** — The SNES controller replaces the Pocket/dock controls (default, as in the SNES core).
+  - **SNAC + Pocket -> P1** — SNES controller and Pocket/dock controls both drive the GBA buttons.
 
 L/R, Start, Select and the D-pad always map directly. Turbo and Fast Forward behaviour still follows the `Button Turbo` and `Fast Forward Mode` settings. If the controller is unplugged, the core reports no buttons pressed.
 

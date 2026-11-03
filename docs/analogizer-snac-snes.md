@@ -29,35 +29,51 @@ unpowered controller cannot hold buttons down.
 
 ## Settings
 
-`analogizer_settings` at bridge address `0xA0000000`:
+The menu follows RndMnkIII's SNES Analogizer core: same entry names, same
+bit layout, but only the options that make sense for a one-player core with
+the SNES reader.
 
-| Bits    | Meaning                                         | Menu entry            |
-|---------|-------------------------------------------------|-----------------------|
-| `[4:0]` | SNAC type: 0 = None, 3 = SNES                   | SNAC Controller       |
-| `[6]`   | SNAC only (ignore Pocket/dock controls)         | SNAC Controller       |
-| `[8]`   | Face buttons: 0 = A/B, 1 = B/Y act as GBA A/B   | SNAC Buttons          |
-| `[9]`   | Disable Turbo/Fast Forward on the SNES pad      | SNAC Buttons          |
-| `[13:10]` | Analog video type                             | Analogizer Video Out  |
+`analogizer_settings` at bridge address `0xA0000000`. The register is
+readable and the three entries that share it are not `writeonly`, so the
+Pocket can merge their masked writes (the SNES core does the same at
+`0xF7000000`).
 
-Menu option values: SNAC Controller None = 0, SNES + Pocket = 3,
-SNES Only = 67. SNAC Buttons values are 0, 256, 512 and 768.
+| Bits      | Meaning                                              | Menu entry                 |
+|-----------|------------------------------------------------------|----------------------------|
+| `[4:0]`   | SNAC adapter: 0x00 None, 0x03 SNES, 0x0B SNES A,B<->X,Y | SNAC Adapter            |
+| `[9:6]`   | Assignment: 0 SNAC -> P1, 1 SNAC + Pocket -> P1      | SNAC Controller Assignment |
+| `[13:10]` | Analog video type                                    | Analogizer Video Out       |
+
+Menu option values: SNAC Adapter None = 0, SNES = 3, SNES A,B<->X,Y = 11.
+SNAC Controller Assignment SNAC -> P1 = 0, SNAC + Pocket -> P1 = 64.
+
+- SNAC -> P1 replaces the Pocket/dock controls, as in the SNES core. With a
+  SNES adapter selected and no pad plugged in, the Pocket controls do nothing.
+- SNAC + Pocket -> P1 ORs both together. The SNES core has no such option;
+  its value 0x40 there means "SNAC -> P2", which has no use in a GBA core.
+- SNES buttons map by name: A, B, L, R, Start, Select, X = Turbo button,
+  Y = Fast Forward button.
+- SNES A,B<->X,Y uses the SNES core's swap: SNES B = GBA A, SNES Y = GBA B,
+  SNES A = X (Turbo), SNES X = Y (Fast Forward).
 
 ## Hardware test checklist
 
 Run on a real Pocket with the Analogizer and a SNES SNAC adapter:
 
-- [ ] SNAC Controller = None: Pocket controls work, SNES pad does nothing.
-- [ ] SNES + Pocket: every SNES button registers (D-pad, A, B, L, R, Start,
-      Select); Pocket controls still work at the same time.
-- [ ] SNES Only: Pocket face buttons and D-pad are ignored; SNES pad works.
-- [ ] SNAC Buttons = A/B, X Turbo, Y FF: Y triggers Fast Forward (per Fast
-      Forward Mode), X triggers Turbo when Button Turbo is enabled.
-- [ ] B/Y, A Turbo, X FF: SNES B = GBA A, SNES Y = GBA B.
-- [ ] A/B Only and B/Y Only: X/Y (or A/X) do nothing.
+- [ ] Menu shows SNAC Adapter, SNAC Controller Assignment and Analogizer
+      Video Out, in that order.
+- [ ] SNAC Adapter = None: Pocket controls work, SNES pad does nothing.
+- [ ] SNES, SNAC -> P1: every SNES button registers (D-pad, A, B, L, R,
+      Start, Select); Pocket face buttons and D-pad are ignored.
+- [ ] SNES, SNAC + Pocket -> P1: SNES pad and Pocket controls both work.
+- [ ] Y triggers Fast Forward (per Fast Forward Mode), X triggers Turbo when
+      Button Turbo is enabled.
+- [ ] SNES A,B<->X,Y: SNES B = GBA A, SNES Y = GBA B, A = Turbo, X = FF.
 - [ ] Unplug the SNES controller mid-game: no stuck buttons. Plug it back in:
       input resumes.
 - [ ] Unplug the SNAC adapter entirely with SNES selected: no stuck buttons.
 - [ ] All video modes (RGBS, RGsB, Y/C NTSC/PAL, Pocket OFF variants) still
       look correct with SNES selected and with None selected.
-- [ ] Changing SNAC settings does not change the selected video mode, and
-      vice versa (both share `0xA0000000` via masks).
+- [ ] Changing a SNAC entry does not change the video mode, and vice versa
+      (all three share `0xA0000000` via masks). Check again after a power
+      cycle, since the persisted values are written back on core load.
